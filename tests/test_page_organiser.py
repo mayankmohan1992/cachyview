@@ -218,3 +218,35 @@ def test_drag_drop_is_enabled(org):
     from PyQt6.QtWidgets import QAbstractItemView
     assert org.grid.dragDropMode() == QAbstractItemView.DragDropMode.InternalMove
     assert org.grid.selectionMode() == QAbstractItemView.SelectionMode.ExtendedSelection
+
+
+def test_overwrite_original_replaces_the_file(app, doc5, monkeypatch):
+    # Accept the confirmation and capture the write callback's output.
+    yes = __import__("PyQt6.QtWidgets", fromlist=["QMessageBox"]).QMessageBox
+    monkeypatch.setattr("cachyview.ui.page_organiser.QMessageBox.question",
+                        lambda *a, **k: yes.StandardButton.Yes)
+
+    written: dict[str, object] = {}
+    import cachyview.core.safe as safe_mod
+    real_replace = safe_mod.replace_in_place
+
+    def fake_replace(dest, write):
+        written["dest"] = dest
+        out = real_replace(dest, write)
+        written["result"] = out
+        return out
+
+    monkeypatch.setattr(safe_mod, "replace_in_place", fake_replace)
+
+    dialog = PageOrganiser(doc5)
+    dialog._overwrite()
+    dialog.cleanup()
+
+    assert written["dest"] == doc5, "must target the original path"
+    assert written["result"] == doc5
+    # apply_layout actually rewrote the file: reopen proves it parses.
+    import fitz as _fitz
+    reopened = _fitz.open(doc5)
+    assert reopened.page_count == 5
+    reopened.close()
+

@@ -76,11 +76,20 @@ class PageOrganiser(QDialog):
         self.box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel, self)
-        save = self.box.button(QDialogButtonBox.StandardButton.Save)
-        if save is not None:
-            save.setText("Apply && Save As…")
+        save_as = self.box.button(QDialogButtonBox.StandardButton.Save)
+        if save_as is not None:
+            save_as.setText("Save As…")
         self.box.accepted.connect(self._apply)
         self.box.rejected.connect(self.reject)
+
+        # Overwrite-original button lives on the left with a clear warning.
+        self.overwrite_btn = QPushButton("Overwrite original", self)
+        self.overwrite_btn.setToolTip(
+            "Replace the file on disk. The previous version is kept as "
+            f"{self.path.name}~ until you quit.")
+        self.box.addButton(self.overwrite_btn,
+                           QDialogButtonBox.ButtonRole.ActionRole)
+        self.overwrite_btn.clicked.connect(self._overwrite)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.hint)
@@ -237,10 +246,47 @@ class PageOrganiser(QDialog):
             self, "Save organised PDF", str(suggested), "PDF files (*.pdf)")
         if not chosen:
             return
+        self._write_to(Path(chosen), ask_overwrite=False)
+
+    def _overwrite(self) -> None:
+        """Replace the original file, keeping a ``name~`` recovery copy."""
+        plan = self.layout_plan()
+        if not plan:
+            QMessageBox.warning(self, "Organise Pages",
+                                "A document must keep at least one page.")
+            return
+        reply = QMessageBox.question(
+            self, "Overwrite original",
+            f"This will replace:\n  {self.path}\n\nThe current file is moved to "
+            f"{self.path.name}~ first, so it can be recovered until you quit. "
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._write_to(self.path, ask_overwrite=False)
+
+    def _write_to(self, dest: Path, *, ask_overwrite: bool) -> None:
+        from ..core.safe import replace_in_place
+
+        plan = self.layout_plan()
+        if not plan:
+            QMessageBox.warning(self, "Organise Pages",
+                                "A document must keep at least one page.")
+            return
+        if ask_overwrite and dest.exists() and dest != self.path:
+            reply = QMessageBox.question(
+                self, "Overwrite?", f"{dest.name} already exists. Replace it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        def write(tmp: Path) -> None:
+            pb.apply_layout(self.path, tmp, plan, self.password)
+
         try:
-            self.result_path = pb.apply_layout(self.path, chosen, plan,
-                                               self.password)
-        except pb.PdfError as exc:
+            self.result_path = replace_in_place(dest, write)
+        except (pb.PdfError, OSError) as exc:
             QMessageBox.critical(self, "Organise Pages", str(exc))
             return
         self.accept()
