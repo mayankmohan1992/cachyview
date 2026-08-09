@@ -69,11 +69,20 @@ class MainWindow(QMainWindow):
         act_quit = file_menu.addAction("&Quit", self.close)
         act_quit.setShortcut(QKeySequence.StandardKey.Quit)
 
+        tools_menu = self.menuBar().addMenu("&Tools")
+        act_batch = tools_menu.addAction("&Batch processing…", self.show_batch)
+        act_batch.setShortcut(QKeySequence("Ctrl+B"))
+
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Dependency report", self.show_deps)
         help_menu.addAction("About CachyView", self.show_about)
 
     # --- opening --------------------------------------------------------
+    def show_batch(self) -> None:
+        """Open the batch-processing queue window."""
+        dialog = BatchDialog(self)
+        dialog.show()
+
     def open_dialog(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Open files")
         for p in paths:
@@ -116,6 +125,7 @@ class MainWindow(QMainWindow):
             return TextTab(path, self)
         if kind == Kind.ARCHIVE:
             from .archive_tab import ArchiveTab
+from .batch_panel import BatchDialog
             return ArchiveTab(path, self)
         if kind == Kind.IMAGE:
             from .image_tab import ImageTab
