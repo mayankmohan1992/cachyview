@@ -156,23 +156,49 @@ def test_encrypted_7z_with_hidden_header(tmp_path, tree):
 
 
 @pytest.mark.skipif(not HAVE_7Z, reason="needs 7zip")
-def test_password_not_leaked_in_argv(tmp_path, tree, monkeypatch):
-    """The password must reach the tool on stdin, never through argv."""
-    seen = {}
-    real = ar.subprocess.run
+def test_password_handling_is_as_documented(tmp_path, tree, monkeypatch):
+    """Document how the password actually reaches the tool.
 
-    def spy(cmd, *a, **kw):
+    7z and unrar read passwords from the controlling terminal, not stdin, so
+    the password must go in argv.  This test pins that reality: if a future
+    change claims otherwise, the docstring in archive.py must change too.
+    """
+    seen = {}
+    import cachyview.core.process as cp
+    real = cp.run
+
+    def spy(cmd, **kw):
         seen["cmd"] = list(cmd)
-        seen["stdin"] = kw.get("input")
-        return real(cmd, *a, **kw)
+        seen["stdin"] = kw.get("input_text")
+        return real(cmd, **kw)
 
     out = _mkzip(tmp_path / "enc.zip", tree, password="topsecret")
-    monkeypatch.setattr(ar.subprocess, "run", spy)
-    try:
-        ar.extract(out, tmp_path / "o4", password="topsecret")
-    except ar.ArchiveError:
-        pass
+    monkeypatch.setattr(cp, "run", spy)
+    ar.extract(out, tmp_path / "o4", password="topsecret")
+
+    # It is also written to stdin so a rejected password cannot hang on a prompt.
     assert "topsecret" in (seen.get("stdin") or "")
+    # And it is in argv, because the tool accepts it nowhere else.
+    assert any("topsecret" in arg for arg in seen["cmd"]), \
+        "password must reach 7z via argv; see the module docstring"
+
+
+def test_pure_python_zip_never_exposes_password(tmp_path, tree, monkeypatch):
+    """The zipfile fallback keeps the password entirely in-process."""
+    import zipfile
+    src = tmp_path / "py.zip"
+    with zipfile.ZipFile(src, "w") as zf:
+        zf.writestr("a.txt", "content")
+
+    calls = []
+    import cachyview.core.process as cp
+    monkeypatch.setattr(cp, "run", lambda cmd, **kw: calls.append(cmd))
+    monkeypatch.setattr(ar, "_sevenzip", lambda: None)
+    monkeypatch.setattr(ar, "_tool", lambda name: None)
+
+    ar.extract(src, tmp_path / "pyout", password="hunter2")
+    assert not calls, "the pure-python path must not spawn any tool"
+    assert (tmp_path / "pyout" / "a.txt").read_text() == "content"
 
 
 # --- security -------------------------------------------------------------

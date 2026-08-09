@@ -4,14 +4,25 @@ Strategy
 --------
 Reading is delegated to whichever tool handles the format best:
 
-* ``7z``      - zip, 7z, tar family, iso, cab, rpm, and encrypted variants.
+* ``7z``      - zip, 7z, iso, cab, rpm, and encrypted variants.
 * ``unrar``   - RAR3/RAR5, including encrypted headers, where it beats 7z.
+* ``tarfile`` - the tar family; 7z reports a compressed tar as one opaque
+  inner ``.tar`` member and so cannot browse it.
 * ``zipfile`` - pure-python fallback so plain zips work with no tools at all.
 
 Every extraction goes through :func:`cachyview.core.sandbox.safe_join`, so a
 malicious member name can never write outside the destination directory.
-Passwords are passed on stdin (``-si`` style prompts), never in argv, so they
-do not leak into the process table.
+
+Password handling
+-----------------
+Passwords are passed to 7z and unrar as ``-p<password>`` arguments.  This is
+not ideal - argv is world-readable through ``/proc`` for the lifetime of the
+child - but neither tool can take a password from a pipe: both read it
+directly from the controlling terminal, so a redirected stdin is ignored and
+authentication fails.  The exposure is limited to the duration of the
+subprocess and to users who can already read this user's processes.  The
+pure-python zip path (used when 7z is absent) never exposes the password at
+all.
 """
 from __future__ import annotations
 
@@ -114,10 +125,12 @@ def _is_rar(path: Path) -> bool:
 
 def _run(cmd: list[str], password: str | None = None,
          timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess:
-    """Run a tool, feeding the password on stdin so it never hits argv.
+    """Run an archive tool with a sanitised environment.
 
-    The environment is sanitised (see ``core.process``) so a foreign
-    PYTHONPATH cannot break python-based helper tools.
+    ``password`` is also written to stdin.  7z and unrar ignore it there (they
+    insist on a terminal), but doing so stops them blocking on a prompt if the
+    argv password is ever rejected, which would otherwise hang the worker
+    thread until the timeout.
     """
     from ..core.process import run as run_tool
     return run_tool(cmd, input_text=(password + "\n") if password is not None else "\n",

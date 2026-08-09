@@ -77,6 +77,14 @@ cachyview --check-deps          # what optional features are available
 6. Archive extraction is sandboxed with path-traversal, symlink-escape and
    decompression-bomb guards.
 
+### Known limitation
+
+Archive passwords are passed to `7z`/`unrar` as command-line arguments, so they
+are briefly visible in `/proc` to other processes of the same user. Neither tool
+can read a password from a pipe — both demand a terminal — so there is no better
+option short of bundling our own crypto. Plain zips handled by the built-in
+Python fallback never expose the password.
+
 ## Layout
 
 ```
