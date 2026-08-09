@@ -33,10 +33,12 @@ def doc10(tmp_path):
 
 
 def drain(loader, expect, timeout=20.0):
-    """Spin the Qt event loop until *expect* thumbnails have arrived.
+    """Spin the event loop, collecting thumbnails already in flight.
 
-    Results already cached before this call are counted too: a fast render can
-    finish before the signal is connected, which would otherwise hang here.
+    Connects *after* any request, so a render that finishes first is missed.
+    Only use this where a short count is acceptable (e.g. asserting that
+    ``stop()`` prevented work).  To require specific pages, use :func:`render`,
+    which connects before requesting.
     """
     got = {}
     loader.ready.connect(lambda n, pm: got.__setitem__(n, pm))
@@ -115,11 +117,24 @@ def test_stop_halts_rendering(app, doc10):
 
 
 def test_out_of_range_pages_are_ignored(app, doc10):
+    """Bogus page numbers are skipped without stopping the valid ones."""
     loader = ThumbnailLoader(doc10)
+    got = {}
+    loader.ready.connect(lambda n, pm: got.__setitem__(n, pm))
     loader.request([99, 1, -3, 0])
-    got = drain(loader, 1)
-    assert 1 in got
-    assert 99 not in got and 0 not in got
+
+    deadline = time.time() + 10
+    while 1 not in got and time.time() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+
+    # Give any bogus page a chance to (wrongly) arrive before asserting.
+    for _ in range(20):
+        QApplication.processEvents()
+        time.sleep(0.01)
+
+    assert 1 in got, "the one valid page should still render"
+    assert set(got) == {1}, f"out-of-range pages were rendered: {sorted(got)}"
 
 
 def test_bad_password_reports_failure(app, tmp_path):
@@ -158,11 +173,19 @@ def test_correct_password_renders(app, tmp_path):
 def test_many_requests_do_not_spawn_many_threads(app, doc10):
     """One worker services the queue; MuPDF handles are not thread-safe."""
     loader = ThumbnailLoader(doc10)
-    before = QThreadPool.globalInstance().activeThreadCount()
+    pool = QThreadPool.globalInstance()
+    assert pool is not None
+    before = pool.activeThreadCount()
     for page in range(1, 11):
         loader.request([page])
-    peak = QThreadPool.globalInstance().activeThreadCount()
-    drain(loader, 10)
+    peak = pool.activeThreadCount()
+
+    # Let the queue finish so the worker does not outlive the test.
+    deadline = time.time() + 20
+    while loader.pending and time.time() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+
     assert peak - before <= 1, f"expected a single worker, saw {peak - before}"
 
 
