@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QInputDialog, QLabel,
                              QLineEdit, QListWidget, QListWidgetItem,
                              QMessageBox, QScrollArea, QSplitter, QToolBar,
@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QInputDialog, QLabel,
 
 from ..backends import pdf as pb
 from ..core.jobs import submit
+from .thumbnails import THUMB_WIDTH, ThumbnailLoader
 
 ZOOMS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
 
@@ -49,9 +50,16 @@ class PdfTab(QWidget):
         # --- sidebar
         self.thumbs = QListWidget(self)
         self.thumbs.setFixedWidth(180)
-        self.thumbs.setIconSize(self.thumbs.iconSize())
+        self.thumbs.setIconSize(QSize(THUMB_WIDTH, int(THUMB_WIDTH * 1.5)))
+        self.thumbs.setUniformItemSizes(True)
+        self.thumbs.setVerticalScrollMode(
+            QListWidget.ScrollMode.ScrollPerPixel)
         self.thumbs.currentRowChanged.connect(
             lambda row: self.go_to(row + 1) if row >= 0 else None)
+        bar = self.thumbs.verticalScrollBar()
+        if bar is not None:
+            bar.valueChanged.connect(lambda _v: self._request_visible_thumbs())
+        self._thumbs: ThumbnailLoader | None = None
 
         self.outline = QListWidget(self)
         self.outline.itemActivated.connect(self._on_outline)
@@ -165,11 +173,47 @@ class PdfTab(QWidget):
         self.outline.setVisible(bool(self.info.toc))
 
     def _fill_thumbs(self) -> None:
+        """Create placeholder rows and start rendering the visible ones."""
+        if self._thumbs is not None:
+            self._thumbs.stop()
         self.thumbs.clear()
         if not self.info:
             return
+
+        placeholder = QPixmap(THUMB_WIDTH, int(THUMB_WIDTH * 1.4))
+        placeholder.fill(self.palette().alternateBase().color())
         for n in range(1, self.info.page_count + 1):
-            self.thumbs.addItem(QListWidgetItem(f"Page {n}"))
+            item = QListWidgetItem(QIcon(placeholder), f"Page {n}")
+            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+            self.thumbs.addItem(item)
+
+        self._thumbs = ThumbnailLoader(self.path, self.password, self)
+        self._thumbs.ready.connect(self._on_thumb_ready)
+        self._request_visible_thumbs()
+
+    def _on_thumb_ready(self, page: int, pixmap: QPixmap) -> None:
+        item = self.thumbs.item(page - 1)
+        if item is not None:
+            item.setIcon(QIcon(pixmap))
+
+    def _request_visible_thumbs(self) -> None:
+        """Render the rows on screen plus a small look-ahead margin."""
+        if self._thumbs is None or not self.info:
+            return
+        total = self.info.page_count
+        first, last = 1, min(total, 12)
+
+        viewport = self.thumbs.viewport()
+        if viewport is not None and self.thumbs.count():
+            top = self.thumbs.indexAt(viewport.rect().topLeft())
+            bottom = self.thumbs.indexAt(viewport.rect().bottomLeft())
+            if top.isValid():
+                first = top.row() + 1
+                last = (bottom.row() + 1) if bottom.isValid() else total
+        margin = 4
+        wanted = range(max(1, first - margin), min(total, last + margin) + 1)
+        self._thumbs.request([n for n in wanted
+                              if self._thumbs.cached(n) is None])
 
     def _on_outline(self, item: QListWidgetItem) -> None:
         page = item.data(Qt.ItemDataRole.UserRole)
@@ -182,7 +226,12 @@ class PdfTab(QWidget):
             return
         self.page = max(1, min(page, self.info.page_count))
         self.page_box.setText(str(self.page))
+        if self.thumbs.currentRow() != self.page - 1:
+            self.thumbs.blockSignals(True)
+            self.thumbs.setCurrentRow(self.page - 1)
+            self.thumbs.blockSignals(False)
         self._render()
+        self._request_visible_thumbs()
 
     def next_page(self) -> None:
         self.go_to(self.page + 1)
@@ -269,3 +318,12 @@ class PdfTab(QWidget):
 
     def save(self) -> bool:
         return True
+
+    def cleanup(self) -> None:
+        """Stop background rendering when the tab goes away."""
+        if self._thumbs is not None:
+            self._thumbs.stop()
+
+    def closeEvent(self, a0) -> None:  # noqa: N802
+        self.cleanup()
+        super().closeEvent(a0)
