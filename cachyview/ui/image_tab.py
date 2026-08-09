@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QInputDialog, QLabel,
                              QMessageBox, QScrollArea, QToolBar, QVBoxLayout,
@@ -46,6 +46,10 @@ class ImageCanvas(QScrollArea):
         self._fit = True
         self._drag_from: QPoint | None = None
 
+        from .crop_overlay import CropOverlay
+        self.crop = CropOverlay(self._label)
+        self.crop.hide()
+
     @property
     def zoom(self) -> float:
         return self._zoom
@@ -71,6 +75,13 @@ class ImageCanvas(QScrollArea):
             Qt.TransformationMode.SmoothTransformation))
         self._label.resize(width, height)
 
+        # The crop overlay lives on the label, so it must track its geometry.
+        keep = self.crop.image_rect() if self.crop.has_selection() else None
+        self.crop.setGeometry(0, 0, width, height)
+        self.crop.configure(self._zoom, self._pixmap.size())
+        if keep is not None:
+            self.crop.set_image_rect(keep)
+
     def set_zoom(self, value: float, *, fit: bool = False) -> None:
         self._fit = fit
         self._zoom = max(0.01, min(32.0, value))
@@ -87,6 +98,27 @@ class ImageCanvas(QScrollArea):
 
     def fit_to_window(self) -> None:
         self.set_zoom(self._zoom, fit=True)
+
+    def set_crop_mode(self, on: bool) -> None:
+        """Show the crop overlay; panning is disabled while it is active."""
+        if on:
+            if self._pixmap is not None:
+                self.crop.configure(self._zoom, self._pixmap.size())
+            self.crop.raise_()
+            self.crop.show()
+        else:
+            self.crop.clear()
+            self.crop.hide()
+
+    @property
+    def crop_active(self) -> bool:
+        """True when crop mode is on.
+
+        ``isHidden()`` rather than ``isVisible()``: a child widget of a window
+        that has not been shown yet is *not* visible, but it is also not
+        hidden, and crop mode must work before the tab is on screen.
+        """
+        return not self.crop.isHidden()
 
     def actual_size(self) -> None:
         self.set_zoom(1.0)
@@ -156,6 +188,9 @@ class ImageTab(QWidget):
         bar.addAction("Flip ↔", lambda: self.add_op("flip", horizontal=True))
         bar.addAction("Flip ↕", lambda: self.add_op("flip", horizontal=False))
         bar.addSeparator()
+        self.crop_action = bar.addAction("Crop", self.toggle_crop)
+        if self.crop_action is not None:
+            self.crop_action.setCheckable(True)
         bar.addAction("Resize…", self.resize_dialog)
         bar.addAction("Grayscale", lambda: self.add_op("grayscale"))
         bar.addAction("Invert", lambda: self.add_op("invert"))
@@ -222,6 +257,42 @@ class ImageTab(QWidget):
             f"· {self.current.mode}{applied}")
 
     # --- dialogs ---------------------------------------------------------
+    # --- cropping ---------------------------------------------------------
+    def toggle_crop(self) -> None:
+        """Enter crop mode, or apply the pending selection and leave it."""
+        if not self.canvas.crop_active:
+            self.canvas.set_crop_mode(True)
+            self.status.setText(
+                "Crop: drag to select, drag inside to move, corners to resize · "
+                "press Crop again to apply, Esc to cancel")
+            return
+
+        rect = self.canvas.crop.image_rect()
+        self.canvas.set_crop_mode(False)
+        if self.crop_action is not None:
+            self.crop_action.setChecked(False)
+
+        if not rect.isValid() or rect.width() < 1 or rect.height() < 1:
+            self.status.setText("Crop cancelled: nothing was selected.")
+            return
+        self.add_op("crop", box=(rect.left(), rect.top(),
+                                 rect.right() + 1, rect.bottom() + 1))
+        self.status.setText(f"Cropped to {rect.width()}x{rect.height()}")
+
+    def cancel_crop(self) -> None:
+        self.canvas.set_crop_mode(False)
+        if self.crop_action is not None:
+            self.crop_action.setChecked(False)
+        self.status.setText("Crop cancelled.")
+
+    def keyPressEvent(self, a0) -> None:  # noqa: N802
+        if (a0 is not None and a0.key() == Qt.Key.Key_Escape
+                and self.canvas.crop_active):
+            self.cancel_crop()
+            a0.accept()
+            return
+        super().keyPressEvent(a0)
+
     def resize_dialog(self) -> None:
         width, ok = QInputDialog.getInt(
             self, "Resize", "New width in pixels:", self.current.width, 1, 100000)
