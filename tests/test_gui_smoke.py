@@ -58,12 +58,38 @@ def test_duplicate_open_focuses_existing_tab(win, tmp_path):
     assert win.tabs.count() == 1
 
 
-def test_pdf_routes_to_placeholder(win, tmp_path):
-    f = tmp_path / "doc.pdf"
+def test_pdf_routes_to_pdf_tab(win, tmp_path):
+    """A real PDF must open in the PDF viewer."""
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open()
+    doc.new_page()
+    f = tmp_path / "real.pdf"
+    doc.save(str(f))
+    doc.close()
+
+    win.open_path(f)
+    from cachyview.ui.pdf_tab import PdfTab
+    tab = win.tabs.widget(0)
+    assert isinstance(tab, PdfTab)
+    assert tab.info is not None and tab.info.page_count == 1
+
+
+def test_corrupt_pdf_reports_error_without_blocking(win, tmp_path):
+    """A malformed PDF must fail gracefully, never opening a modal dialog.
+
+    Regression: the tab used to call QInputDialog from its constructor, which
+    hung forever with no user present.
+    """
+    f = tmp_path / "broken.pdf"
     f.write_bytes(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\ntrailer\n")
     win.open_path(f)
+
+    from cachyview.ui.pdf_tab import PdfTab
     tab = win.tabs.widget(0)
-    assert isinstance(tab, PlaceholderTab)
+    assert isinstance(tab, PdfTab)
+    assert tab.info is None
+    assert tab.error, "the failure should be recorded on the tab"
+    assert tab.status.text()
 
 
 def test_json_pretty_print(win, tmp_path):

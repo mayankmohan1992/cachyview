@@ -92,8 +92,8 @@ class MainWindow(QMainWindow):
 
         kind = detect_kind(p)
         try:
-            widget = TextTab(p, self) if kind == Kind.TEXT else PlaceholderTab(p, kind, self)
-        except (OSError, UnicodeError) as exc:
+            widget = self._make_tab(p, kind)
+        except Exception as exc:      # a broken file must not kill the window
             QMessageBox.critical(self, "Cannot open", f"{p.name}: {exc}")
             return
 
@@ -102,7 +102,28 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(index)
         if hasattr(widget, "modified_changed"):
             widget.modified_changed.connect(lambda m, w=widget: self._mark_modified(w, m))
+        if hasattr(widget, "open_request"):
+            widget.open_request.connect(self.open_path)
         self.statusBar().showMessage(f"Opened {p.name} ({kind.value})", 4000)
+
+    def _make_tab(self, path: Path, kind: Kind) -> QWidget:
+        """Build the viewer widget appropriate to *kind*.
+
+        Imports are local so a missing optional dependency only breaks the one
+        file type that needs it, not the whole application.
+        """
+        if kind == Kind.TEXT:
+            return TextTab(path, self)
+        if kind == Kind.ARCHIVE:
+            from .archive_tab import ArchiveTab
+            return ArchiveTab(path, self)
+        if kind == Kind.IMAGE:
+            from .image_tab import ImageTab
+            return ImageTab(path, self)
+        if kind == Kind.PDF:
+            from .pdf_tab import PdfTab
+            return PdfTab(path, self)
+        return PlaceholderTab(path, kind, self)
 
     def _mark_modified(self, widget: QWidget, modified: bool) -> None:
         index = self.tabs.indexOf(widget)
@@ -140,6 +161,8 @@ class MainWindow(QMainWindow):
             if choice == QMessageBox.StandardButton.Save and not widget.save():
                 return
         self.tabs.removeTab(index)
+        if hasattr(widget, "cleanup"):
+            widget.cleanup()          # archive tabs purge their scratch dir
         widget.deleteLater()
 
     def closeEvent(self, event) -> None:  # noqa: N802

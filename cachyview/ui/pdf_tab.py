@@ -1,0 +1,271 @@
+"""PDF viewer tab: continuous page view, thumbnails, outline, search and tools."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QInputDialog, QLabel,
+                             QLineEdit, QListWidget, QListWidgetItem,
+                             QMessageBox, QScrollArea, QSplitter, QToolBar,
+                             QVBoxLayout, QWidget)
+
+from ..backends import pdf as pb
+from ..core.jobs import submit
+
+ZOOMS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
+
+
+def _shortcut(action, keys: str) -> None:
+    if action is not None:
+        action.setShortcut(keys)
+
+
+class PdfTab(QWidget):
+    """Read a PDF and run the toolbox against it."""
+
+    modified_changed = pyqtSignal(bool)
+    open_request = pyqtSignal(str)
+
+    def __init__(self, path: Path, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.path = Path(path)
+        self.password: str | None = None
+        self.info: pb.PdfInfo | None = None
+        self.error = ""
+        self.page = 1
+        self.zoom = 1.0
+        self._jobs: list = []
+        self._page_cache: dict[tuple[int, int], QPixmap] = {}
+
+        # --- page view
+        self.page_label = QLabel(self)
+        self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.view = QScrollArea(self)
+        self.view.setWidget(self.page_label)
+        self.view.setWidgetResizable(True)
+        self.view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # --- sidebar
+        self.thumbs = QListWidget(self)
+        self.thumbs.setFixedWidth(180)
+        self.thumbs.setIconSize(self.thumbs.iconSize())
+        self.thumbs.currentRowChanged.connect(
+            lambda row: self.go_to(row + 1) if row >= 0 else None)
+
+        self.outline = QListWidget(self)
+        self.outline.itemActivated.connect(self._on_outline)
+
+        side = QSplitter(Qt.Orientation.Vertical, self)
+        side.addWidget(self.thumbs)
+        side.addWidget(self.outline)
+
+        split = QSplitter(Qt.Orientation.Horizontal, self)
+        split.addWidget(side)
+        split.addWidget(self.view)
+        split.setStretchFactor(1, 1)
+
+        # --- toolbars
+        nav = QToolBar(self)
+        _shortcut(nav.addAction("◀", self.prev_page), "PgUp")
+        self.page_box = QLineEdit(self)
+        self.page_box.setFixedWidth(60)
+        self.page_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_box.returnPressed.connect(self._on_page_box)
+        nav.addWidget(self.page_box)
+        self.page_total = QLabel(" / ?", self)
+        nav.addWidget(self.page_total)
+        _shortcut(nav.addAction("▶", self.next_page), "PgDown")
+        nav.addSeparator()
+        nav.addAction("−", self.zoom_out)
+        nav.addAction("+", self.zoom_in)
+        nav.addAction("Fit", self.fit_width)
+
+        self.search_box = QLineEdit(self)
+        self.search_box.setPlaceholderText("Search text…")
+        self.search_box.setClearButtonEnabled(True)
+        self.search_box.returnPressed.connect(self.search_next)
+        nav.addSeparator()
+        nav.addWidget(self.search_box)
+
+        tools = QToolBar(self)
+        self.tool_box = QComboBox(self)
+        self.tool_box.addItems([
+            "Tools…", "Rotate pages", "Delete pages", "Extract pages",
+            "Split", "Merge with…", "Compress", "Protect", "Unlock",
+            "Watermark", "Page numbers", "To images", "To text", "OCR",
+            "Repair", "Metadata",
+        ])
+        self.tool_box.activated.connect(self._on_tool)
+        tools.addWidget(self.tool_box)
+
+        self.status = QLabel(self)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.addWidget(nav, 1)
+        top.addWidget(tools)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addLayout(top)
+        layout.addWidget(split, 1)
+        layout.addWidget(self.status)
+
+        # prompt=False: a constructor must never block on a modal dialog.
+        self.reload(prompt=False)
+
+    # --- loading ---------------------------------------------------------
+    def reload(self, *, prompt: bool = True) -> None:
+        """Load the document.
+
+        Errors are reported through ``self.error`` and the status bar rather
+        than a modal dialog, so constructing a tab never blocks.  Only an
+        explicit user action (``prompt=True`` from the retry button) may open
+        the password dialog.
+        """
+        self.error = ""
+        try:
+            self.info = pb.info(self.path, self.password)
+        except pb.PdfPasswordRequired as exc:
+            self.error = str(exc)
+            self.status.setText("Password required — use Unlock to enter it.")
+            if prompt and self._ask_password():
+                return self.reload(prompt=False)
+            return
+        except pb.PdfError as exc:
+            self.error = str(exc)
+            self.status.setText(str(exc))
+            return
+
+        self._page_cache.clear()
+        self.page_total.setText(f" / {self.info.page_count}")
+        self._fill_outline()
+        self._fill_thumbs()
+        self.go_to(min(self.page, self.info.page_count))
+
+    def _ask_password(self) -> bool:
+        pw, ok = QInputDialog.getText(
+            self, "Password required", f"Password for {self.path.name}:",
+            QLineEdit.EchoMode.Password)
+        if ok and pw:
+            self.password = pw
+            return True
+        return False
+
+    def _fill_outline(self) -> None:
+        self.outline.clear()
+        if not self.info:
+            return
+        for level, title, page in self.info.toc:
+            item = QListWidgetItem("   " * max(0, level - 1) + title)
+            item.setData(Qt.ItemDataRole.UserRole, page)
+            self.outline.addItem(item)
+        self.outline.setVisible(bool(self.info.toc))
+
+    def _fill_thumbs(self) -> None:
+        self.thumbs.clear()
+        if not self.info:
+            return
+        for n in range(1, self.info.page_count + 1):
+            self.thumbs.addItem(QListWidgetItem(f"Page {n}"))
+
+    def _on_outline(self, item: QListWidgetItem) -> None:
+        page = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(page, int):
+            self.go_to(page)
+
+    # --- navigation ------------------------------------------------------
+    def go_to(self, page: int) -> None:
+        if not self.info:
+            return
+        self.page = max(1, min(page, self.info.page_count))
+        self.page_box.setText(str(self.page))
+        self._render()
+
+    def next_page(self) -> None:
+        self.go_to(self.page + 1)
+
+    def prev_page(self) -> None:
+        self.go_to(self.page - 1)
+
+    def _on_page_box(self) -> None:
+        try:
+            self.go_to(int(self.page_box.text()))
+        except ValueError:
+            self.page_box.setText(str(self.page))
+
+    def zoom_in(self) -> None:
+        self.zoom = next((z for z in ZOOMS if z > self.zoom + 1e-6), ZOOMS[-1])
+        self._render()
+
+    def zoom_out(self) -> None:
+        self.zoom = next((z for z in reversed(ZOOMS) if z < self.zoom - 1e-6), ZOOMS[0])
+        self._render()
+
+    def fit_width(self) -> None:
+        if not self.info or not self.info.pages:
+            return
+        viewport = self.view.viewport()
+        avail = (viewport.width() if viewport else self.width()) - 24
+        page_width = self.info.pages[self.page - 1].width
+        if page_width > 0:
+            self.zoom = max(0.1, min(4.0, avail / page_width))
+        self._render()
+
+    def _render(self) -> None:
+        if not self.info:
+            return
+        dpi = int(72 * self.zoom)
+        key = (self.page, dpi)
+        cached = self._page_cache.get(key)
+        if cached is None:
+            try:
+                data = pb.render_page(self.path, self.page, dpi=dpi,
+                                      password=self.password)
+            except pb.PdfError as exc:
+                self.status.setText(str(exc))
+                return
+            cached = QPixmap()
+            cached.loadFromData(data, "PNG")
+            if len(self._page_cache) > 24:      # bound the cache
+                self._page_cache.clear()
+            self._page_cache[key] = cached
+        self.page_label.setPixmap(cached)
+        self.status.setText(
+            f"Page {self.page} of {self.info.page_count} · {int(self.zoom * 100)}%")
+
+    # --- search ----------------------------------------------------------
+    def search_next(self) -> None:
+        needle = self.search_box.text().strip()
+        if not needle or not self.info:
+            return
+        total = self.info.page_count
+        for offset in range(1, total + 1):
+            n = (self.page - 1 + offset) % total + 1
+            try:
+                text = pb.extract_text(self.path, [n], self.password)
+            except pb.PdfError:
+                break
+            if needle.lower() in text.lower():
+                self.go_to(n)
+                self.status.setText(f"Found '{needle}' on page {n}")
+                return
+        self.status.setText(f"'{needle}' not found")
+
+    # --- tools -----------------------------------------------------------
+    def _on_tool(self, index: int) -> None:
+        name = self.tool_box.itemText(index)
+        self.tool_box.setCurrentIndex(0)
+        if index == 0:
+            return
+        from .pdf_tools import run_tool
+        run_tool(self, name)
+
+    # --- lifecycle -------------------------------------------------------
+    def is_modified(self) -> bool:
+        return False
+
+    def save(self) -> bool:
+        return True

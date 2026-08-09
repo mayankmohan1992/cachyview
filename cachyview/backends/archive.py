@@ -135,7 +135,10 @@ _PW_NEEDED = ("enter password", "password required", "is encrypted")
 def _classify_error(output: str, had_password: bool) -> ArchiveError:
     low = output.lower()
     if any(m in low for m in _PW_MARKERS):
-        return WrongPassword("Incorrect password.")
+        # Tools report "wrong password" even when none was supplied; only call
+        # it wrong if the user actually gave one.
+        return WrongPassword("Incorrect password.") if had_password \
+            else PasswordRequired("This archive is password protected.")
     if any(m in low for m in _PW_NEEDED):
         return WrongPassword("Incorrect password.") if had_password \
             else PasswordRequired("This archive is password protected.")
