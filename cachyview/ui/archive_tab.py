@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QFileDialog, QHeaderView,
 
 from ..backends import archive as ar
 from ..core.jobs import submit
+from .archive_drag import DraggableArchiveTree
 from ..core.sandbox import Sandbox, UnsafePath
 
 
@@ -37,7 +38,7 @@ class ArchiveTab(QWidget):
         self._sandbox = Sandbox(prefix="arc-")
         self._jobs: list = []
 
-        self.tree = QTreeWidget(self)
+        self.tree = DraggableArchiveTree(self)
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["Name", "Size", "Packed", "Modified"])
         self.tree.setSortingEnabled(True)
@@ -241,6 +242,10 @@ class ArchiveTab(QWidget):
     def _on_job_failed(self, message: str, _trace: str) -> None:
         self.status.setText(message)
         QMessageBox.warning(self, "Extraction failed", message)
+
+    def _drag_failed(self, message: str) -> None:
+        self.status.setText(message)
+        QMessageBox.warning(self, "Cannot drag out", message)
 
     def test_integrity(self) -> None:
         try:
