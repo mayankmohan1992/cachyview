@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cachyview"
+version = "0.1.0"
+description = "Fast native archive, PDF, image and text toolkit for CachyOS"
+requires-python = ">=3.11"
+dependencies = ["PyQt6", "Pillow"]
+
+[project.optional-dependencies]
+pdf = ["PyMuPDF", "pikepdf", "img2pdf"]
+dev = ["pytest"]
+
+[project.scripts]
+cachyview = "cachyview.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["cachyview*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

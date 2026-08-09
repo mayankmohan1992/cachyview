@@ -31,7 +31,8 @@ python -m cachyview --check-deps      # what optional features are available
 ## Test
 
 ```bash
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests -q
+pytest                                # self-configuring; runs headless
+python tools/shot.py out.png          # render the UI for visual review
 ```
 
 ## Design rules

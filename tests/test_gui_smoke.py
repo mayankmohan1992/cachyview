@@ -1,16 +1,12 @@
 """Headless GUI smoke test: real QApplication, real tabs, real widgets."""
-import os
-
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt6.QtGui import QTextCursor
+from PyQt6.QtWidgets import QApplication
 
-from PyQt6.QtGui import QTextCursor  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from cachyview.core.mime import Kind  # noqa: E402
-from cachyview.ui.main_window import MainWindow, PlaceholderTab  # noqa: E402
-from cachyview.ui.text_tab import TextTab  # noqa: E402
+from cachyview.core.mime import Kind
+from cachyview.ui.main_window import MainWindow, PlaceholderTab
+from cachyview.ui.text_tab import TextTab
 
 
 @pytest.fixture(scope="session")

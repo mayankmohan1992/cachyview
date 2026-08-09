@@ -1,4 +1,4 @@
-"""Render the running UI to a PNG so the layout can be visually verified."""
+"""Render the UI to a PNG for visual review.  Usage: python tools/shot.py [out.png]"""
 import os
 import sys
 
@@ -19,5 +19,4 @@ app.processEvents()
 
 out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/cachyview_shot.png"
 win.grab().save(out)
-print(f"saved {out}")
-print(f"tabs: {[win.tabs.tabText(i) for i in range(win.tabs.count())]}")
+print(f"saved {out}  tabs={[win.tabs.tabText(i) for i in range(win.tabs.count())]}")
