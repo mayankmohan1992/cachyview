@@ -106,7 +106,7 @@ class PdfTab(QWidget):
         self.tool_box.addItems([
             "Tools…", "Organise pages…", "Rotate pages", "Delete pages",
             "Extract pages",
-            "Split", "Merge with…", "Compress", "Protect", "Unlock",
+            "Split", "Merge with…", "Compress", "Flatten", "Protect", "Unlock",
             "Watermark", "Page numbers", "To images", "To text", "OCR",
             "Repair", "Metadata",
         ])

@@ -510,3 +510,18 @@ def test_annotations_persist_in_valid_pdf(tmp_path):
     assert reopened.get_page_text(0) != ""
     reopened.close()
 
+
+def test_flatten_bakes_annotations(tmp_path):
+    """Flatten must remove editable annotations but keep the page text."""
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=1)
+    ann = tmp_path / "ann.pdf"
+    pdf.add_annotations(src, ann, [
+        pdf.Annotation(page=1, kind="highlight", rect=(40, 50, 300, 90),
+                       text="review")])
+    out = pdf.flatten(ann, tmp_path / "flat.pdf")
+    assert len(pdf.list_annotations(out)) == 0, "marks must be baked in"
+    reopened = fitz.open(out)
+    assert "Page" in reopened.get_page_text(0)
+    reopened.close()
+

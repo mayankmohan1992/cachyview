@@ -149,6 +149,23 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
                  lambda ctx: pb.compress(src, out, tier=key, password=pw, ctx=ctx),
                  done)
 
+    elif name == "Flatten":
+        reply = QMessageBox.question(
+            tab, "Flatten",
+            "Flattening bakes annotations and form fields into the page so they "
+            "can no longer be edited or removed. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        out = output_path(src, "flattened")
+
+        def done(result):
+            _done_message(tab, result)
+
+        _run_job(tab, "Flattening",
+                 lambda ctx: pb.flatten(src, out, password=pw), done)
+
     elif name == "Protect":
         pwd, ok = QInputDialog.getText(
             tab, "Protect", "New password:", QLineEdit.EchoMode.Password)

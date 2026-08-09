@@ -490,6 +490,30 @@ def list_annotations(path: str | os.PathLike,
     return out
 
 
+def flatten(path: str | os.PathLike, dest: str | os.PathLike,
+            *, password: str | None = None) -> Path:
+    """Bake annotations and form fields into the page content.
+
+    After flattening, highlights/notes/forms are no longer editable and are
+    rendered as ordinary page marks — essential before sharing a reviewed
+    draft.  Uses PyMuPDF's in-place flatten, which is lossless for the
+    underlying page text.
+    """
+    fitz = _fitz()
+    doc = open_doc(path, password)
+    try:
+        if hasattr(doc, "bake"):
+            doc.bake(annots=True, widgets=True)
+        else:  # PyMuPDF < 1.24 fallback
+            for page in doc:
+                page.apply_redactions() if hasattr(page, "apply_redactions") \
+                    else page.flatten()
+        doc.save(str(dest), garbage=3, deflate=True, clean=True)
+    finally:
+        doc.close()
+    return Path(dest)
+
+
 def unlock(path: str | os.PathLike, dest: str | os.PathLike,
            password: str) -> Path:
     """Write a decrypted copy.  Requires the correct password."""

@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
     # --- opening --------------------------------------------------------
     def show_batch(self) -> None:
         """Open the batch-processing queue window."""
+        from .batch_panel import BatchDialog
         dialog = BatchDialog(self)
         dialog.show()
 
@@ -125,7 +126,6 @@ class MainWindow(QMainWindow):
             return TextTab(path, self)
         if kind == Kind.ARCHIVE:
             from .archive_tab import ArchiveTab
-from .batch_panel import BatchDialog
             return ArchiveTab(path, self)
         if kind == Kind.IMAGE:
             from .image_tab import ImageTab
