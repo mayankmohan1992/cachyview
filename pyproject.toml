@@ -15,6 +15,7 @@ dev = ["pytest"]
 
 [project.scripts]
 cachyview = "cachyview.__main__:main"
+cachyview-cli = "cachyview.integration.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["cachyview*"]

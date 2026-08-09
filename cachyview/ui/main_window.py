@@ -137,8 +137,12 @@ class MainWindow(QMainWindow):
         widget = self.tabs.currentWidget()
         if widget is None:
             self.setWindowTitle("CachyView")
-        else:
-            self.setWindowTitle(f"{self.tabs.tabText(self.tabs.currentIndex())} — CachyView")
+            self.statusBar().clearMessage()
+            return
+        self.setWindowTitle(f"{self.tabs.tabText(self.tabs.currentIndex())} — CachyView")
+        # Clear any message left over from another tab; each tab shows its own
+        # state in its internal status label.
+        self.statusBar().clearMessage()
 
     # --- saving / closing ------------------------------------------------
     def save_current(self) -> None:
