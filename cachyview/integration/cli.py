@@ -100,9 +100,15 @@ def cmd_pdf(args) -> int:
             out = Path(args.output) if args.output else output_path(src, "compressed")
             out, before, after = pb.compress(src, out, tier=args.tier,
                                              password=args.password)
-            saved = 100 - (after * 100 // max(1, before))
-            print(f"{before // 1024} KB -> {after // 1024} KB ({saved}% smaller)")
-            _notify("PDF compressed", f"{out.name}: {saved}% smaller")
+            if after < before:
+                saved = 100 - (after * 100 // max(1, before))
+                print(f"{before // 1024} KB -> {after // 1024} KB ({saved}% smaller)")
+                _notify("PDF compressed", f"{out.name}: {saved}% smaller")
+            else:
+                # Already-optimised or text-only PDFs can grow when re-encoded.
+                print(f"{before // 1024} KB -> {after // 1024} KB "
+                      f"(no reduction; the original was already compact)")
+                _notify("PDF compressed", f"{out.name}: no size reduction")
             return 0
         elif args.action == "rotate":
             out = Path(args.output) if args.output else output_path(src, "rotated")

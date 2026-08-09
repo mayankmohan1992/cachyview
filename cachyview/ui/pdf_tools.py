@@ -129,9 +129,14 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
 
         def done(result):
             path, before, after = result
-            saved = 100 - (after * 100 // max(1, before))
-            _done_message(tab, path,
-                          f"\n{before // 1024} KB → {after // 1024} KB ({saved}% smaller)")
+            if after < before:
+                saved = 100 - (after * 100 // max(1, before))
+                detail = (f"\n{before // 1024} KB → {after // 1024} KB "
+                          f"({saved}% smaller)")
+            else:
+                detail = (f"\n{before // 1024} KB → {after // 1024} KB"
+                          "\nNo reduction: this PDF was already compact.")
+            _done_message(tab, path, detail)
 
         _run_job(tab, "Compressing",
                  lambda ctx: pb.compress(src, out, tier=key, password=pw, ctx=ctx),

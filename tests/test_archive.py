@@ -76,6 +76,24 @@ def test_list_missing_file(tmp_path):
         ar.list_archive(tmp_path / "nope.zip")
 
 
+@pytest.mark.skipif(not HAVE_7Z, reason="needs 7zip")
+def test_listing_reports_format_name(tmp_path, tree):
+    """Regression: -ba suppressed the banner carrying 'Type = zip'."""
+    out = _mkzip(tmp_path / "a.zip", tree)
+    assert ar.list_archive(out).format.lower() == "zip"
+
+
+@pytest.mark.skipif(not HAVE_7Z, reason="needs 7zip")
+def test_archive_itself_is_not_listed_as_member(tmp_path, tree):
+    """Regression: the banner's own 'Path = <archive>' became a phantom entry."""
+    out = _mkzip(tmp_path / "a.zip", tree)
+    info = ar.list_archive(out)
+    names = {e.name for e in info.entries}
+    assert str(out) not in names
+    assert out.name not in names
+    assert info.file_count == 3, names
+
+
 # --- extraction -----------------------------------------------------------
 
 @pytest.mark.skipif(not HAVE_7Z, reason="needs 7zip")

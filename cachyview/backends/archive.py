@@ -155,15 +155,26 @@ _7Z_FIELD = re.compile(r"^(\w[\w ]*?)\s*=\s*(.*)$")
 def _parse_7z_listing(text: str) -> tuple[list[Entry], str]:
     """Parse ``7z l -slt`` output (one ``Key = Value`` block per member).
 
-    With ``-ba`` there is no ``----------`` banner, so blocks are simply
-    separated by blank lines and a new block starts at each ``Path =``.
+    The output starts with a banner describing the archive itself, which also
+    contains ``Path =`` and ``Type =`` lines.  Member blocks begin only after
+    the ``----------`` separator, so the banner is read for the format name
+    and then skipped; without that, the archive's own path is mistaken for a
+    member.
     """
     entries: list[Entry] = []
     fmt = ""
     current: dict[str, str] = {}
+    in_members = "----------" not in text      # -ba output has no separator
 
     for line in text.splitlines():
         stripped = line.strip()
+        if not in_members:
+            if stripped.startswith("Type =") and not fmt:
+                fmt = stripped.split("=", 1)[1].strip()
+            if stripped.startswith("----------"):
+                in_members = True
+            continue
+
         if not stripped:
             if current.get("Path"):
                 entries.append(_entry_from_7z(current))
@@ -177,8 +188,6 @@ def _parse_7z_listing(text: str) -> tuple[list[Entry], str]:
             # A new block began without an intervening blank line.
             entries.append(_entry_from_7z(current))
             current = {}
-        if key == "Type" and not current:
-            fmt = value
         current[key] = value
     if current.get("Path"):
         entries.append(_entry_from_7z(current))
@@ -320,12 +329,15 @@ def list_archive(path: str | os.PathLike, password: str | None = None) -> Archiv
 
     seven = _sevenzip()
     if seven:
-        res = _run([seven, "l", "-slt", "-ba", f"-p{'' if password is None else password}",
+        # No -ba: the banner carries the "Type = zip" line we use for the
+        # format name.  _parse_7z_listing skips everything before the first
+        # member block anyway.
+        res = _run([seven, "l", "-slt", f"-p{'' if password is None else password}",
                     "--", str(p)], password=password)
         if res.returncode != 0:
             raise _classify_error(res.stdout + res.stderr, password is not None)
         entries, fmt = _parse_7z_listing(res.stdout)
-        info = ArchiveInfo(path=p, entries=entries, format=fmt)
+        info = ArchiveInfo(path=p, entries=entries, format=fmt or p.suffix.lstrip("."))
         info.encrypted = any(e.encrypted for e in entries)
         return info
 

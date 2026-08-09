@@ -106,6 +106,15 @@ def test_cli_pdf_split(sample_pdf, tmp_path):
     assert len(list(dest.glob("*.pdf"))) == 4
 
 
+def test_cli_compress_no_false_negative_percentage(sample_pdf, tmp_path, capsys):
+    """A tiny text PDF can grow; never report a negative '% smaller'."""
+    out = tmp_path / "small.pdf"
+    assert cli_main(["pdf", "compress", str(sample_pdf), "-o", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert "-" not in text.split("(")[-1], text
+    assert ("smaller" in text) or ("no reduction" in text.lower())
+
+
 def test_cli_pdf_merge(sample_pdf, tmp_path):
     out = tmp_path / "merged.pdf"
     assert cli_main(["pdf", "merge", str(sample_pdf), str(sample_pdf),
