@@ -450,7 +450,8 @@ def optimise_file(path: str | os.PathLike) -> tuple[int, int]:
 
     if cmd:
         try:
-            subprocess.run(cmd, capture_output=True, timeout=120, check=False)
+            from ..core.process import run as run_tool
+            run_tool(cmd, timeout=120)
         except (OSError, subprocess.SubprocessError):
             pass
     return before, p.stat().st_size

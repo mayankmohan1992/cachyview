@@ -114,12 +114,14 @@ def _is_rar(path: Path) -> bool:
 
 def _run(cmd: list[str], password: str | None = None,
          timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess:
-    """Run a tool, feeding the password on stdin so it never hits argv."""
-    return subprocess.run(
-        cmd,
-        input=(password + "\n") if password is not None else "\n",
-        capture_output=True, text=True, timeout=timeout, check=False,
-    )
+    """Run a tool, feeding the password on stdin so it never hits argv.
+
+    The environment is sanitised (see ``core.process``) so a foreign
+    PYTHONPATH cannot break python-based helper tools.
+    """
+    from ..core.process import run as run_tool
+    return run_tool(cmd, input_text=(password + "\n") if password is not None else "\n",
+                    timeout=timeout)
 
 
 _PW_MARKERS = (
