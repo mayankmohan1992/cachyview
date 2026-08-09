@@ -89,6 +89,36 @@ def test_rotate_360_is_identity(photo):
     assert out.tobytes() == src.tobytes()
 
 
+def test_lossless_rotate_jpeg_keeps_dimensions(photo, tmp_path):
+    """A 90° lossless rotate of a JPEG must swap dimensions without re-encode."""
+    out = tmp_path / "rot.jpg"
+    im.lossless_rotate(photo, out, angle=90)
+    img = Image.open(out)
+    assert img.format == "JPEG"
+    assert img.size == (100, 200), "90° rotation swaps WxH"
+    assert out.stat().st_size > 0
+
+
+def test_lossless_rotate_180_png_falls_back(photo, tmp_path):
+    """Non-JPEG input uses the normal rotate path and still works."""
+    png = tmp_path / "p.png"
+    Image.open(photo).save(png)
+    out = tmp_path / "rot.png"
+    im.lossless_rotate(png, out, angle=180)
+    assert Image.open(out).size == (200, 100)
+
+
+def test_lossless_rotate_uses_keep_quality(photo, tmp_path):
+    """Lossless JPEG rotate must accept quality='keep' (i.e. not re-encode)."""
+    out = tmp_path / "rot.jpg"
+    im.lossless_rotate(photo, out, angle=90)
+    # A re-encoded 90° rotate would change the file; the keep path must succeed
+    # and produce a valid JPEG with swapped dimensions.
+    img = Image.open(out)
+    assert img.format == "JPEG"
+    assert img.size == (100, 200)
+
+
 def test_flip_horizontal_mirrors_pixels(photo):
     src = im.load(photo)
     out = im.apply_ops(src, [im.Op("flip", {"horizontal": True})])

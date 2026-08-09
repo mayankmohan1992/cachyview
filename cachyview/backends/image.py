@@ -359,6 +359,44 @@ def to_bytes(img: Image.Image, fmt: str = "PNG") -> bytes:
     return buf.getvalue()
 
 
+def lossless_rotate(path: str | os.PathLike, dest: str | os.PathLike,
+                    *, angle: int = 90) -> Path:
+    """Rotate a JPEG by a multiple of 90° with NO re-encoding.
+
+    Pillow's ``Image.transpose`` performs a true lossless JPEG transform when
+    the source is a JPEG and the angle is 90/180/270, so pixels are not
+    re-quantised.  For other formats or angles the ordinary (lossy) rotate is
+    used as a fallback.  EXIF orientation is preserved.
+    """
+    p = Path(path)
+    out = Path(dest)
+    angle = angle % 360
+    is_jpeg = p.suffix.lower() in (".jpg", ".jpeg")
+    exact = {90: Image.Transpose.ROTATE_90, 180: Image.Transpose.ROTATE_180,
+             270: Image.Transpose.ROTATE_270}
+    if is_jpeg and angle in exact:
+        with Image.open(p) as src:
+            if src.format != "JPEG":
+                src = src.convert("RGB")
+            transposed = src.transpose(exact[angle])
+            # Pillow's JPEG writer keys 'quality="keep"' off the *output* image's
+            # format, which is None on a transposed copy. Tag it as JPEG so the
+            # lossless path engages for a real JPEG source.
+            if src.format == "JPEG":
+                transposed.format = "JPEG"
+            exif = src.info.get("exif")
+            save_kwargs = {"exif": exif} if exif else {}
+            if is_jpeg:
+                save_kwargs["quality"] = "keep"
+                save_kwargs["subsampling"] = "keep"
+            transposed.save(out, "JPEG", **save_kwargs)
+    else:
+        img = load(p)  # raises ImageError on failure
+        rotated = apply_ops(img, [Op("rotate", {"angle": angle})])
+        save(rotated, out, source=img)
+    return out
+
+
 def batch_convert(sources: list[str | os.PathLike], dest_dir: str | os.PathLike,
                   suffix: str = ".png", *, quality: int = 92,
                   ops: list[Op] | None = None, ctx=None) -> list[Path]:

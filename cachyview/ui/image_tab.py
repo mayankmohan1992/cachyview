@@ -188,6 +188,9 @@ class ImageTab(QWidget):
         bar.addAction("Flip ↔", lambda: self.add_op("flip", horizontal=True))
         bar.addAction("Flip ↕", lambda: self.add_op("flip", horizontal=False))
         bar.addSeparator()
+        bar.addAction("Lossless ⟲", lambda: self.lossless_rotate(270))
+        bar.addAction("Lossless ⟳", lambda: self.lossless_rotate(90))
+        bar.addSeparator()
         self.crop_action = bar.addAction("Crop", self.toggle_crop)
         if self.crop_action is not None:
             self.crop_action.setCheckable(True)
@@ -232,6 +235,35 @@ class ImageTab(QWidget):
         if self._redo:
             self.ops.append(self._redo.pop())
             self._reapply()
+
+    def lossless_rotate(self, angle: int) -> None:
+        """Rotate the file on disk losslessly (JPEG right-angles) via the backend."""
+        from ..backends import image as ib
+        from ..core.safe import replace_in_place
+        src = self.path
+
+        def write(tmp: Path) -> None:
+            ib.lossless_rotate(src, tmp, angle=angle)
+
+        try:
+            out = replace_in_place(src, write)
+        except ib.ImageError as exc:
+            QMessageBox.warning(self, "Lossless rotate failed", str(exc))
+            return
+        # Reload the freshly rotated file so the view and EXIF match disk.
+        self.reload_from(out)
+
+    def reload_from(self, path: Path) -> None:
+        """Replace the loaded image in place after an external on-disk change."""
+        from ..backends import image as ib
+        self.path = path
+        self.original = ib.load(path)
+        self.info = ib.info(path)
+        self.ops.clear()
+        self._redo.clear()
+        self.current = self.original.copy()
+        self._refresh()
+        self.modified_changed.emit(False)
 
     def _reapply(self) -> None:
         """Rebuild the preview from the original plus the op stack.
