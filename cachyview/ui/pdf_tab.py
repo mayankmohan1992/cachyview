@@ -99,7 +99,8 @@ class PdfTab(QWidget):
         tools = QToolBar(self)
         self.tool_box = QComboBox(self)
         self.tool_box.addItems([
-            "Tools…", "Rotate pages", "Delete pages", "Extract pages",
+            "Tools…", "Organise pages…", "Rotate pages", "Delete pages",
+            "Extract pages",
             "Split", "Merge with…", "Compress", "Protect", "Unlock",
             "Watermark", "Page numbers", "To images", "To text", "OCR",
             "Repair", "Metadata",

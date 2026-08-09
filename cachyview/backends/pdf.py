@@ -320,6 +320,46 @@ def rotate_pages(path: str | os.PathLike, dest: str | os.PathLike, *,
     return out
 
 
+def apply_layout(path: str | os.PathLike, dest: str | os.PathLike,
+                 layout: list[tuple[int, int]],
+                 password: str | None = None) -> Path:
+    """Rebuild a document from an arbitrary page layout.
+
+    *layout* is a list of ``(source_page, rotation)`` pairs, where
+    ``source_page`` is 1-based and ``rotation`` is an absolute angle in
+    degrees.  Unlike :func:`reorder_pages` this is not restricted to a
+    permutation: a page may be repeated (duplicate), omitted (delete) or
+    reordered, which is what the page organiser needs.
+
+    Pages are copied structurally, so text stays selectable and nothing is
+    re-rendered.
+    """
+    pikepdf = _pikepdf()
+    src, out = Path(path), Path(dest)
+    if not layout:
+        raise PdfError("The document must keep at least one page.")
+
+    with pikepdf.open(src, password=password or "") as doc:
+        total = len(doc.pages)
+        for source, _ in layout:
+            if not 1 <= source <= total:
+                raise PdfError(f"Page {source} is outside this {total}-page document.")
+
+        with pikepdf.Pdf.new() as part:
+            for source, rotation in layout:
+                # copy_foreign-free: appending the same page twice needs a copy
+                part.pages.append(doc.pages[source - 1])
+                page = part.pages[len(part.pages) - 1]
+                angle = int(rotation) % 360
+                if angle:
+                    page.Rotate = angle
+                elif "/Rotate" in page:
+                    del page.Rotate
+            part.remove_unreferenced_resources()
+            part.save(out)
+    return out
+
+
 def reorder_pages(path: str | os.PathLike, dest: str | os.PathLike,
                   order: list[int], password: str | None = None) -> Path:
     """Rewrite the document with pages in the given 1-based *order*."""

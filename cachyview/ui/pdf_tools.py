@@ -54,6 +54,13 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
     """Execute the named tool against ``tab.path``."""
     src: Path = tab.path
     pw = tab.password
+
+    if name == "Organise pages…":
+        from .page_organiser import PageOrganiser
+        dialog = PageOrganiser(src, pw, tab)
+        if dialog.exec() and dialog.result_path is not None:
+            _done_message(tab, dialog.result_path)
+        return
     total = tab.info.page_count if tab.info else 0
 
     def ranges_prompt(title: str, default: str = "") -> str | None:

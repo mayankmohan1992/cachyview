@@ -204,6 +204,55 @@ def test_reorder_rejects_incomplete_order(tmp_path, sample):
         pdf.reorder_pages(sample, tmp_path / "o2.pdf", [1, 2])
 
 
+# --- apply_layout (page organiser backend) --------------------------------
+
+def test_apply_layout_duplicates_a_page(tmp_path, sample):
+    out = tmp_path / "dup.pdf"
+    pdf.apply_layout(sample, out, [(1, 0), (1, 0), (2, 0)])
+    assert pdf.info(out).page_count == 3
+    assert pdf.extract_text(out, [1]).strip() == pdf.extract_text(out, [2]).strip()
+
+
+def test_apply_layout_drops_pages(tmp_path, sample):
+    out = tmp_path / "drop.pdf"
+    pdf.apply_layout(sample, out, [(2, 0)])
+    info = pdf.info(out)
+    assert info.page_count == 1
+    assert "2" in pdf.extract_text(out, [1])
+
+
+def test_apply_layout_sets_absolute_rotation(tmp_path, sample):
+    out = tmp_path / "rot.pdf"
+    pdf.apply_layout(sample, out, [(1, 90), (2, 270), (3, 0)])
+    assert [p.rotation for p in pdf.info(out).pages] == [90, 270, 0]
+
+
+def test_apply_layout_rejects_empty(tmp_path, sample):
+    with pytest.raises(pdf.PdfError, match="at least one page"):
+        pdf.apply_layout(sample, tmp_path / "empty.pdf", [])
+
+
+def test_apply_layout_rejects_out_of_range(tmp_path, sample):
+    with pytest.raises(pdf.PdfError, match="outside"):
+        pdf.apply_layout(sample, tmp_path / "bad.pdf", [(99, 0)])
+
+
+def test_apply_layout_keeps_text_selectable(tmp_path, sample):
+    """Structural copy, not a re-render: text must survive."""
+    out = tmp_path / "sel.pdf"
+    pdf.apply_layout(sample, out, [(3, 0), (1, 0)])
+    assert pdf.extract_text(out, [1]).strip()
+    assert pdf.extract_text(out, [2]).strip()
+
+
+def test_apply_layout_on_encrypted_source(tmp_path, sample):
+    enc = tmp_path / "enc.pdf"
+    pdf.protect(sample, enc, user_password="pw")
+    out = tmp_path / "enc_out.pdf"
+    pdf.apply_layout(enc, out, [(2, 90), (1, 0)], password="pw")
+    assert [p.rotation for p in pdf.info(out).pages] == [90, 0]
+
+
 def test_reorder_rejects_duplicates(tmp_path, sample):
     with pytest.raises(pdf.PdfError):
         pdf.reorder_pages(sample, tmp_path / "o3.pdf", [1, 1, 2])
