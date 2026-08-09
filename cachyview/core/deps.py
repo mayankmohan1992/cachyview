@@ -27,7 +27,7 @@ DEPS: tuple[Dep, ...] = (
     Dep("pikepdf", "py", "pikepdf", "python-pikepdf", "lossless PDF structure ops"),
     Dep("pillow", "py", "PIL", "python-pillow", "image loading and editing", required=True),
     Dep("pygments", "py", "pygments", "python-pygments", "syntax highlighting"),
-    Dep("img2pdf", "py", "img2pdf", "python-img2pdf", "lossless image to PDF"),
+    Dep("img2pdf", "py", "img2pdf", "img2pdf", "lossless image to PDF"),
     Dep("sevenzip", "bin", "7z", "7zip", "7z/zip/rar archive extraction", required=True),
     Dep("unrar", "bin", "unrar", "unrar", "RAR5 and encrypted RAR"),
     Dep("gs", "bin", "gs", "ghostscript", "PDF compression and PDF/A"),
