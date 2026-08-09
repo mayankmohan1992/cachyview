@@ -4,14 +4,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QIcon, QPixmap
-from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QInputDialog, QLabel,
-                             QLineEdit, QListWidget, QListWidgetItem,
-                             QMessageBox, QScrollArea, QSplitter, QToolBar,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QPixmap
+from PyQt6.QtWidgets import (QColorDialog, QComboBox, QHBoxLayout, QInputDialog,
+                             QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                             QMenu, QMessageBox, QPushButton, QScrollArea,
+                             QSplitter, QToolBar, QToolButton, QVBoxLayout,
+                             QWidget)
 
 from ..backends import pdf as pb
 from ..core.jobs import submit
+from .annotation_layer import AnnotationLayer
 from .thumbnails import THUMB_WIDTH, ThumbnailLoader
 
 ZOOMS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
@@ -46,6 +48,9 @@ class PdfTab(QWidget):
         self.view.setWidget(self.page_label)
         self.view.setWidgetResizable(True)
         self.view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Annotation overlay lives on top of the rendered page label.
+        self.annot_layer = AnnotationLayer(self)
 
         # --- sidebar
         self.thumbs = QListWidget(self)
@@ -107,6 +112,37 @@ class PdfTab(QWidget):
         ])
         self.tool_box.activated.connect(self._on_tool)
         tools.addWidget(self.tool_box)
+
+        # --- annotation controls
+        self.annot_btn = QToolButton(self)
+        self.annot_btn.setText("Annotate")
+        self.annot_btn.setCheckable(True)
+        self.annot_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.annot_menu = QMenu(self)
+        self.annot_action = QActionGroup(self)
+        self.annot_action.setExclusive(True)
+        for key, label in (("highlight", "Highlight"),
+                            ("underline", "Underline"),
+                            ("note", "Note")):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setData(key)
+            self.annot_action.addAction(act)
+            self.annot_menu.addAction(act)
+        self.annot_btn.setMenu(self.annot_menu)
+        self.annot_action.triggered.connect(self._on_annotate_mode)
+        self.annot_color = QColor(255, 217, 51)
+        self.annot_color_btn = QPushButton("▮", self)
+        self.annot_color_btn.setToolTip("Annotation colour")
+        self.annot_color_btn.clicked.connect(self._pick_annot_color)
+        self.show_marks_btn = QToolButton(self)
+        self.show_marks_btn.setText("Marks")
+        self.show_marks_btn.setCheckable(True)
+        self.show_marks_btn.setChecked(True)
+        self.show_marks_btn.toggled.connect(self._on_toggle_marks)
+        tools.addWidget(self.annot_btn)
+        tools.addWidget(self.annot_color_btn)
+        tools.addWidget(self.show_marks_btn)
 
         self.status = QLabel(self)
 
@@ -285,6 +321,9 @@ class PdfTab(QWidget):
         self.page_label.setPixmap(cached)
         self.status.setText(
             f"Page {self.page} of {self.info.page_count} · {int(self.zoom * 100)}%")
+        # keep the annotation overlay aligned with the page
+        self.annot_layer.sync_geometry()
+        self.annot_layer.refresh()
 
     # --- search ----------------------------------------------------------
     def search_next(self) -> None:
@@ -303,6 +342,66 @@ class PdfTab(QWidget):
                 self.status.setText(f"Found '{needle}' on page {n}")
                 return
         self.status.setText(f"'{needle}' not found")
+
+    # --- annotations -----------------------------------------------------
+    def _on_annotate_mode(self, action) -> None:
+        mode = action.data()
+        self.annot_layer.color = (self.annot_color.red() / 255,
+                                  self.annot_color.green() / 255,
+                                  self.annot_color.blue() / 255)
+        self.annot_layer.set_mode(mode)
+        self.annot_btn.setChecked(mode != "off")
+        verb = {"highlight": "drag to highlight",
+                "underline": "drag to underline",
+                "note": "drag, then type a note"}[mode]
+        self.status.setText(f"Annotation mode: {verb}. Esc or toggle off to stop.")
+
+    def _pick_annot_color(self) -> None:
+        col = QColorDialog.getColor(self.annot_color, self,
+                                    "Annotation colour")
+        if col.isValid():
+            self.annot_color = col
+            self.annot_color_btn.setStyleSheet(
+                f"color: {col.name()}; font-size: 14px;")
+            if self.annot_layer.mode != "off":
+                self.annot_layer.color = (col.red() / 255, col.green() / 255,
+                                          col.blue() / 255)
+                self.annot_layer.update()
+
+    def _on_toggle_marks(self, checked: bool) -> None:
+        self.annot_layer.set_show_marks(checked)
+
+    def apply_annotation(self, kind: str, rect, color, text: str) -> None:
+        """Write one annotation into the PDF (safe-swapped) on a worker."""
+        from ..core.safe import replace_in_place
+        from ..backends.pdf import Annotation
+
+        ann = Annotation(page=self.page, kind=kind, rect=rect,
+                         color=color, text=text)
+
+        def write(tmp: Path) -> None:
+            pb.add_annotations(self.path, tmp, [ann], self.password)
+
+        self.status.setText(f"Adding {kind}…")
+        try:
+            replace_in_place(self.path, write)
+        except (pb.PdfError, OSError) as exc:
+            QMessageBox.critical(self, "Annotation failed", str(exc))
+            return
+        # Reload the document so info reflects the new annotation.
+        self._page_cache.clear()
+        self.annot_layer.refresh()
+        self.status.setText(f"Added {kind} on page {self.page}.")
+
+    def keyPressEvent(self, a0) -> None:  # noqa: N802
+        if a0 is not None and a0.key() == Qt.Key.Key_Escape \
+                and self.annot_layer.mode != "off":
+            self.annot_layer.set_mode("off")
+            self.annot_btn.setChecked(False)
+            self.status.setText("Annotation mode off.")
+            a0.accept()
+            return
+        super().keyPressEvent(a0)
 
     # --- tools -----------------------------------------------------------
     def _on_tool(self, index: int) -> None:

@@ -452,3 +452,61 @@ def test_ocr_adds_text_layer(tmp_path):
 
     out = pdf.ocr(scan, tmp_path / "ocr.pdf", force=True)
     assert "SEARCHABLE" in pdf.extract_text(out).upper()
+
+
+# --- annotations (Tier-1: persistent markup that travels with the file) ---
+
+def test_add_and_list_highlight(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2)
+    out = tmp_path / "ann.pdf"
+    ann = pdf.Annotation(page=1, kind="highlight", rect=(40, 50, 300, 90),
+                          color=(1.0, 0.85, 0.2), text="key point")
+    pdf.add_annotations(src, out, [ann])
+    # re-read from the written file
+    found = pdf.list_annotations(out)
+    assert len(found) == 1
+    a = found[0]
+    assert a.page == 1
+    assert a.kind == "highlight"
+    assert a.text == "key point"
+    assert a.rect[0] == 40 and a.rect[2] == 300
+    assert a.color[0] == 1.0
+
+
+def test_add_note_and_underline(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=3)
+    out = tmp_path / "ann.pdf"
+    pdf.add_annotations(src, out, [
+        pdf.Annotation(page=2, kind="underline", rect=(10, 10, 200, 40)),
+        pdf.Annotation(page=3, kind="note", rect=(100, 100, 120, 120),
+                       text="remember this"),
+    ])
+    anns = pdf.list_annotations(out)
+    assert {a.kind for a in anns} == {"underline", "note"}
+    note = next(a for a in anns if a.kind == "note")
+    assert note.text == "remember this"
+
+
+def test_annotation_rejects_bad_page(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=1)
+    with pytest.raises(pdf.PdfError):
+        pdf.add_annotations(src, tmp_path / "x.pdf",
+                            [pdf.Annotation(page=9, kind="highlight",
+                                            rect=(0, 0, 10, 10))])
+
+
+def test_annotations_persist_in_valid_pdf(tmp_path):
+    """The annotated file must still open as a valid PDF."""
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=1)
+    out = tmp_path / "ann.pdf"
+    pdf.add_annotations(src, out, [
+        pdf.Annotation(page=1, kind="highlight", rect=(40, 50, 300, 90))])
+    reopened = fitz.open(out)
+    assert reopened.page_count == 1
+    assert reopened.get_page_text(0) != ""
+    reopened.close()
+

@@ -378,6 +378,129 @@ def reorder_pages(path: str | os.PathLike, dest: str | os.PathLike,
 
 
 # --------------------------------------------------------------------------
+# annotations (written into the PDF so they travel with the file)
+# --------------------------------------------------------------------------
+
+@dataclass
+class Annotation:
+    """A markup annotation attached to a page of the document."""
+
+    page: int                 # 1-based
+    kind: str                # "highlight" | "underline" | "note"
+    rect: tuple[float, float, float, float]   # x0, y0, x1, y1 in PDF points
+    color: tuple[float, float, float] = (1.0, 0.85, 0.2)   # RGB 0..1
+    text: str = ""           # note body / comment
+
+
+def _rect_obj(rect):
+    from pikepdf import Rectangle
+    return Rectangle(rect[0], rect[1], rect[2], rect[3])
+
+
+def add_annotations(path: str | os.PathLike, dest: str | os.PathLike,
+                    annotations: list[Annotation],
+                    password: str | None = None) -> Path:
+    """Add markup annotations to pages.
+
+    Highlights and underlines carry a quad-points array covering the marked
+    text; notes are sticky text annotations.  Unlike Okular, the result is
+    stored *inside* the PDF, so the marks survive being emailed or opened in
+    another viewer.  Returns the output path.
+    """
+    pikepdf = _pikepdf()
+    src, out = Path(path), Path(dest)
+    with pikepdf.open(src, password=password or "") as doc:
+        total = len(doc.pages)
+        for ann in annotations:
+            if not 1 <= ann.page <= total:
+                raise PdfError(f"Page {ann.page} is outside this {total}-page doc.")
+            page = doc.pages[ann.page - 1]
+            obj = pikepdf.Dictionary(
+                Type=pikepdf.Name("/Annot"),
+                Subtype=pikepdf.Name(f"/{_subtype(ann.kind)}"),
+                Rect=_rect_obj(ann.rect),
+                Contents=pikepdf.String(ann.text or ""),
+                C=_color_array(ann.color),
+            )
+            if ann.kind in ("highlight", "underline"):
+                obj.QuadPoints = _quad_points(ann.rect)
+            if ann.kind == "note":
+                obj.Name = pikepdf.Name("/Comment")
+                obj.Open = pikepdf.Name("/No")
+            if "/Annots" not in page:
+                page.Annots = pikepdf.Array()
+            page.Annots.append(obj)
+        doc.save(out)
+    return out
+
+
+def _subtype(kind: str) -> str:
+    return {"highlight": "Highlight", "underline": "Underline",
+            "note": "Text"}.get(kind, "Highlight")
+
+
+def _color_array(color: tuple[float, float, float]):
+    from pikepdf import Array
+    return Array(list(color))
+
+
+def _quad_points(rect) -> "Array":
+    """QuadPoints covering the rectangle (4 corners, y flipped for PDF)."""
+    from pikepdf import Array
+    x0, y0, x1, y1 = rect
+    # PDF quad points are 8 numbers: (x,y) of each corner, top row first.
+    pts = [x0, y1, x1, y1, x0, y0, x1, y0]
+    return Array(list(pts))
+
+
+def list_annotations(path: str | os.PathLike,
+                     password: str | None = None) -> list[Annotation]:
+    """Read the annotations currently in the document (for the UI to show)."""
+    pikepdf = _pikepdf()
+    out: list[Annotation] = []
+    with pikepdf.open(src := Path(path), password=password or "") as doc:
+        for i, page in enumerate(doc.pages):
+            fors = page.get("/Annots")
+            if not fors:
+                continue
+            for ref in fors:
+                ann = ref.get_object() if hasattr(ref, "get_object") else ref
+                sub = str(ann.get("/Subtype", "")).lstrip("/")
+                if sub not in ("Highlight", "Underline", "Text"):
+                    continue
+                rect = ann.get("/Rect")
+                try:
+                    r = (float(rect[0]), float(rect[1]),
+                         float(rect[2]), float(rect[3]))
+                except (TypeError, ValueError):
+                    r = (0.0, 0.0, 0.0, 0.0)
+                text = str(ann.get("/Contents", ""))
+                color = (1.0, 0.85, 0.2)
+                cobj = ann.get("/C")
+                if cobj is not None:
+                    try:
+                        color = (float(cobj[0]), float(cobj[1]), float(cobj[2]))
+                    except (TypeError, ValueError, IndexError):
+                        pass
+                out.append(Annotation(
+                    page=i + 1,
+                    kind={"Highlight": "highlight", "Underline": "underline",
+                          "Text": "note"}.get(sub, "highlight"),
+                    rect=r, color=color, text=text))
+    return out
+
+
+def unlock(path: str | os.PathLike, dest: str | os.PathLike,
+           password: str) -> Path:
+    """Write a decrypted copy.  Requires the correct password."""
+    pikepdf = _pikepdf()
+    src, out = Path(path), Path(dest)
+    with pikepdf.open(src, password=password or "") as doc:
+        doc.save(out)
+    return out
+
+
+# --------------------------------------------------------------------------
 # security
 # --------------------------------------------------------------------------
 
