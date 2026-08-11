@@ -630,6 +630,38 @@ def append_pages(src: str | os.PathLike, dest: str | os.PathLike,
                         password=password)
 
 
+def stamp(src: str | os.PathLike, dest: str | os.PathLike, *,
+          image: str | os.PathLike | None = None,
+          text: str | None = None, page: int | None = None,
+          rect: tuple[float, float, float, float] | None = None,
+          password: str | None = None) -> Path:
+    """Place a signature (image and/or text) onto a page.
+
+    *page* is 1-based (defaults to the last page).  *rect* is in PDF points
+    ``(x0, y0, x1, y1)``; if omitted the stamp is centred near the bottom.
+    """
+    fitz = _fitz()
+    doc = open_doc(src, password)
+    try:
+        target = page or doc.page_count
+        pg = doc[target - 1]
+        if rect is None:
+            h = 60
+            w = 220
+            rect = (pg.rect.width - w - 40, pg.rect.height - h - 40,
+                    pg.rect.width - 40, pg.rect.height - 40)
+        frect = fitz.Rect(*rect)
+        if image is not None:
+            pg.insert_image(frect, filename=str(image))
+        if text:
+            pg.insert_textbox(frect, text, fontsize=12,
+                              color=(0.1, 0.1, 0.1), align=fitz.TEXT_ALIGN_LEFT)
+        doc.save(str(dest), garbage=3, deflate=True, clean=True)
+    finally:
+        doc.close()
+    return Path(dest)
+
+
 def unlock(path: str | os.PathLike, dest: str | os.PathLike,
            password: str) -> Path:
     """Write a decrypted copy.  Requires the correct password."""

@@ -255,3 +255,23 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
                                              {"title": title, "author": author},
                                              password=pw),
                  lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Sign / Stamp":
+        img, _ = QFileDialog.getOpenFileName(
+            tab, "Signature image (optional)", "",
+            "Images (*.png *.jpg *.jpeg *.pdf)")
+        text, ok = QInputDialog.getText(
+            tab, "Stamp text", "Caption to print (optional):")
+        if not ok:
+            return
+        out = output_path(src, "stamped")
+        _run_job(tab, "Stamping",
+                 lambda ctx: pb.stamp(src, out, image=img or None,
+                                     text=text or None, password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Redact…":
+        QMessageBox.information(
+            tab, "Redact",
+            "Use the Annotate ▸ Redact (permanent) tool on the toolbar, then "
+            "drag a box over the content to remove it permanently.")

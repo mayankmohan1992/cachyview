@@ -588,3 +588,22 @@ def test_insert_selective_pages(tmp_path):
                            pages=[1, 3])
     assert fitz.open(out).page_count == 4
 
+
+def test_stamp_adds_text_to_last_page(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2)
+    out = pdf.stamp(src, tmp_path / "stamped.pdf", text="Signed by me",
+                    page=2)
+    assert "Signed by me" in fitz.open(out).get_page_text(1)
+
+
+def test_stamp_image_placed(tmp_path):
+    from PIL import Image
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=1)
+    sig = tmp_path / "sig.png"
+    Image.new("RGBA", (100, 50), (200, 30, 30, 255)).save(sig)
+    out = pdf.stamp(src, tmp_path / "stamped.pdf", image=sig, page=1)
+    # Image stamp should not corrupt the file and remains valid.
+    assert fitz.open(out).page_count == 1
+

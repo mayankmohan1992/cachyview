@@ -108,7 +108,7 @@ class PdfTab(QWidget):
             "Extract pages",
             "Split", "Merge with…", "Compress", "Flatten", "Protect", "Unlock",
             "Watermark", "Page numbers", "To images", "To text", "OCR",
-            "Repair", "Metadata",
+            "Repair", "Redact…", "Sign / Stamp", "Metadata",
         ])
         self.tool_box.activated.connect(self._on_tool)
         tools.addWidget(self.tool_box)
