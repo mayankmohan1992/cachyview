@@ -143,6 +143,14 @@ class PdfTab(QWidget):
         tools.addWidget(self.annot_btn)
         tools.addWidget(self.annot_color_btn)
         tools.addWidget(self.show_marks_btn)
+        tools.addSeparator()
+        self.present_btn = QPushButton("▶ Present", self)
+        self.present_btn.setToolTip(
+            "Auto-advance pages on a timer (presentation / hands-free reading)")
+        self.present_btn.setCheckable(True)
+        self.present_btn.toggled.connect(self._toggle_present)
+        tools.addWidget(self.present_btn)
+        self._present_timer = None
 
         self.status = QLabel(self)
 
@@ -275,6 +283,29 @@ class PdfTab(QWidget):
 
     def prev_page(self) -> None:
         self.go_to(self.page - 1)
+
+    def _toggle_present(self, on: bool) -> None:
+        """Start/stop a timer that advances pages automatically."""
+        from PyQt6.QtCore import QTimer
+        if on:
+            self._present_timer = QTimer(self)
+            self._present_timer.setInterval(3000)
+            self._present_timer.timeout.connect(self._present_tick)
+            self._present_timer.start()
+            self.status.setText("Presenting — pages advance every 3s (Esc/again to stop)")
+        else:
+            if self._present_timer is not None:
+                self._present_timer.stop()
+                self._present_timer.deleteLater()
+                self._present_timer = None
+            self.status.setText("Presentation stopped.")
+
+    def _present_tick(self) -> None:
+        if self.page >= self.info.page_count:
+            # loop back to the start so a deck plays continuously
+            self.go_to(1)
+        else:
+            self.next_page()
 
     def _on_page_box(self) -> None:
         try:

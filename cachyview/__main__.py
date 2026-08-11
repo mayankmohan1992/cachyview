@@ -51,11 +51,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from PyQt6.QtWidgets import QApplication
     from .ui.main_window import MainWindow
+    from .ui import theming
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName("CachyView")
     app.setApplicationDisplayName("CachyView")
     app.setDesktopFileName("cachyview")
+    theming.apply_system_theme(app)
     window = MainWindow(args.files)
     window.show()
     return app.exec()

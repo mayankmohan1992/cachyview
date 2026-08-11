@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Dependency report", self.show_deps)
+        help_menu.addAction("&Shortcuts", self.show_shortcuts)
         help_menu.addAction("About CachyView", self.show_about)
 
     # --- opening --------------------------------------------------------
@@ -288,3 +289,10 @@ class MainWindow(QMainWindow):
             "<h3>CachyView</h3>"
             "<p>A fast native archive, PDF, image and text toolkit for CachyOS.</p>"
             "<p>Built on Qt 6, MuPDF, qpdf, libarchive and Pillow. No network access.</p>")
+
+    def show_shortcuts(self) -> None:
+        from . import theming
+        box = QMessageBox(self)
+        box.setWindowTitle("Keyboard shortcuts")
+        box.setText(theming.format_shortcuts())
+        box.exec()
