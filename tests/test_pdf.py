@@ -557,3 +557,34 @@ def test_redact_leaves_other_text(tmp_path):
     assert "DROPME" not in text
     assert "KEEPME" in text
 
+
+def test_insert_pdf_pages(tmp_path):
+    """Inserting a 1-page PDF after page 1 grows the document by one."""
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2)
+    other = tmp_path / "other.pdf"
+    make_pdf(other, pages=1, text="Inserted")
+    out = pdf.insert_pages(src, tmp_path / "out.pdf", other, after=1)
+    assert fitz.open(out).page_count == 3
+
+
+def test_append_image_as_page(tmp_path):
+    """Appending an image rasterises it to a new final page."""
+    from PIL import Image
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2)
+    pic = tmp_path / "pic.png"
+    Image.new("RGB", (200, 300), (10, 20, 30)).save(pic)
+    out = pdf.append_pages(src, tmp_path / "out.pdf", pic)
+    assert fitz.open(out).page_count == 3
+
+
+def test_insert_selective_pages(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2)
+    other = tmp_path / "other.pdf"
+    make_pdf(other, pages=3, text="X")
+    out = pdf.insert_pages(src, tmp_path / "out.pdf", other, after=0,
+                           pages=[1, 3])
+    assert fitz.open(out).page_count == 4
+

@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import io
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -568,6 +569,65 @@ def protect(path: str | os.PathLike, dest: str | os.PathLike, *,
             user=user_password, owner=owner_password or user_password,
             R=6, allow=perms))
     return out
+
+
+def insert_pages(src: str | os.PathLike, dest: str | os.PathLike,
+                 insert_path: str | os.PathLike, *,
+                 after: int = 0, password: str | None = None,
+                 pages: list[int] | None = None) -> Path:
+    """Insert pages from *insert_path* after page *after* (1-based) in *src*.
+
+    *insert_path* may be a PDF (insert its pages) or an image (rasterised to a
+    full page).  If *pages* is given, only those 1-based page numbers are taken.
+    """
+    pikepdf = _pikepdf()
+    suffix = Path(insert_path).suffix.lower()
+    if suffix == ".pdf":
+        with pikepdf.open(src, password=password or "") as doc:
+            with pikepdf.open(insert_path) as incoming:
+                indices = pages or list(range(1, len(incoming.pages) + 1))
+                for n in indices:
+                    doc.pages.insert(after, incoming.pages[n - 1])
+                    after += 1
+            doc.save(dest)
+    else:
+        # Image insertion is done with PyMuPDF, which reliably rasterises the
+        # image into a new page; re-open with pikepdf only to splice it in.
+        from . import image as ib
+        img = ib.load(insert_path)
+        raster = _rasterised_pdf(img)  # a single-page PDF on disk
+        fitz = _fitz()
+        with fitz.open(src) as doc:
+            with fitz.open(raster) as extra:
+                doc.insert_pdf(extra)
+            doc.save(dest, encryption=False)
+        Path(raster).unlink(missing_ok=True)
+    return Path(dest)
+
+
+def _rasterised_pdf(img) -> str:
+    """Write a single-page PDF of *img* to a temp file; return its path."""
+    import tempfile
+    fitz = _fitz()
+    fd, path = tempfile.mkstemp(suffix=".pdf", prefix="cachyview-raster-")
+    os.close(fd)
+    doc = fitz.open()
+    page = doc.new_page(width=img.width, height=img.height)
+    import io
+    png = io.BytesIO()
+    img.convert("RGB").save(png, "PNG")
+    page.insert_image(page.rect, stream=png.getvalue())
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def append_pages(src: str | os.PathLike, dest: str | os.PathLike,
+                 append_path: str | os.PathLike, *,
+                 password: str | None = None) -> Path:
+    """Append every page of *append_path* to the end of *src*."""
+    return insert_pages(src, dest, append_path, after=10**9,
+                        password=password)
 
 
 def unlock(path: str | os.PathLike, dest: str | os.PathLike,
