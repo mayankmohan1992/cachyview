@@ -47,8 +47,11 @@ class ImageCanvas(QScrollArea):
         self._drag_from: QPoint | None = None
 
         from .crop_overlay import CropOverlay
+        from .inspect_overlay import InspectOverlay
         self.crop = CropOverlay(self._label)
         self.crop.hide()
+        self.inspect = InspectOverlay(self._label)
+        self.inspect.hide()
 
     @property
     def zoom(self) -> float:
@@ -81,6 +84,9 @@ class ImageCanvas(QScrollArea):
         self.crop.configure(self._zoom, self._pixmap.size())
         if keep is not None:
             self.crop.set_image_rect(keep)
+        # The inspect overlay tracks zoom/geometry the same way.
+        self.inspect.setGeometry(0, 0, width, height)
+        self.inspect.configure(self._zoom, self._pixmap.size())
 
     def set_zoom(self, value: float, *, fit: bool = False) -> None:
         self._fit = fit
@@ -162,6 +168,7 @@ class ImageTab(QWidget):
     """Full image tab: canvas, toolbar and a non-destructive edit stack."""
 
     modified_changed = pyqtSignal(bool)
+    inspect_readout = pyqtSignal(str)
 
     def __init__(self, path: Path, parent: QWidget | None = None):
         super().__init__(parent)
@@ -174,6 +181,7 @@ class ImageTab(QWidget):
         self.current = self.original
 
         self.canvas = ImageCanvas(self)
+        self.canvas.inspect.readout.connect(self.inspect_readout)
         self.status = QLabel(self)
 
         bar = QToolBar(self)
@@ -190,6 +198,16 @@ class ImageTab(QWidget):
         bar.addSeparator()
         bar.addAction("Lossless ⟲", lambda: self.lossless_rotate(270))
         bar.addAction("Lossless ⟳", lambda: self.lossless_rotate(90))
+        bar.addSeparator()
+        # Inspection tools (non-destructive): picker, ruler, magnifier.
+        self._inspect_actions: dict[str, object] = {}
+        for label, mode in (("Picker", "picker"),
+                            ("Ruler", "ruler"),
+                            ("Magnifier", "magnifier")):
+            act = bar.addAction(label, lambda m=mode: self.set_inspect_mode(m))
+            if act is not None:
+                act.setCheckable(True)
+                self._inspect_actions[mode] = act
         bar.addSeparator()
         self.crop_action = bar.addAction("Crop", self.toggle_crop)
         if self.crop_action is not None:
@@ -316,6 +334,37 @@ class ImageTab(QWidget):
         if self.crop_action is not None:
             self.crop_action.setChecked(False)
         self.status.setText("Crop cancelled.")
+
+    def set_inspect_mode(self, mode: str) -> None:
+        """Toggle one of the inspection tools (picker / ruler / magnifier).
+
+        Selecting one disables the others and leaves crop mode, since the
+        overlays would otherwise fight over mouse events.
+        """
+        if self.canvas.crop_active:
+            self.canvas.set_crop_mode(False)
+            if self.crop_action is not None:
+                self.crop_action.setChecked(False)
+
+        if self._inspect_actions.get(mode) is not None and \
+                self._inspect_actions[mode].isChecked():  # type: ignore[union-attr]
+            # already on -> turn off
+            self.canvas.inspect.set_mode("off")
+            self._inspect_actions[mode].setChecked(False)  # type: ignore[union-attr]
+            self.status.setText("Inspection off.")
+            return
+
+        self.canvas.inspect.set_mode(mode)
+        for m, act in self._inspect_actions.items():
+            if act is not None:
+                act.setChecked(m == mode)  # type: ignore[union-attr]
+        hints = {
+            "picker": "Picker: hover to read colour, click to copy the hex.",
+            "ruler": "Ruler: drag from A to B to measure the distance.",
+            "magnifier": "Magnifier: a zoomed lens follows the cursor.",
+        }
+        self.status.setText(hints.get(mode, ""))
+        self.inspect_readout.connect(self.status.setText)
 
     def keyPressEvent(self, a0) -> None:  # noqa: N802
         if (a0 is not None and a0.key() == Qt.Key.Key_Escape
