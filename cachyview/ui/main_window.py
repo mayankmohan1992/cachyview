@@ -6,9 +6,10 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence
 from PyQt6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QMessageBox,
-                             QTabWidget, QWidget)
+                             QMenu, QTabWidget, QWidget)
 
 from ..core.mime import Kind, detect_kind
+from ..core import recents
 from .text_tab import TextTab
 
 
@@ -55,6 +56,9 @@ class MainWindow(QMainWindow):
 
         for p in paths or []:
             self.open_path(p)
+        # If launched with no files, reopen what was open last session.
+        if not paths:
+            self.restore_session()
 
     # --- menu ----------------------------------------------------------
     def _build_menu(self) -> None:
@@ -68,6 +72,9 @@ class MainWindow(QMainWindow):
         act_close.setShortcut(QKeySequence.StandardKey.Close)
         act_quit = file_menu.addAction("&Quit", self.close)
         act_quit.setShortcut(QKeySequence.StandardKey.Quit)
+
+        self.recent_menu = file_menu.addMenu("&Recent")
+        self._fill_recent_menu()
 
         tools_menu = self.menuBar().addMenu("&Tools")
         act_batch = tools_menu.addAction("&Batch processing…", self.show_batch)
@@ -114,7 +121,29 @@ class MainWindow(QMainWindow):
             widget.modified_changed.connect(lambda m, w=widget: self._mark_modified(w, m))
         if hasattr(widget, "open_request"):
             widget.open_request.connect(self.open_path)
+        recents.remember(p)
+        self._fill_recent_menu()
         self.statusBar().showMessage(f"Opened {p.name} ({kind.value})", 4000)
+
+    def _fill_recent_menu(self) -> None:
+        """(Re)build the Recent menu from the persistent store."""
+        self.recent_menu.clear()
+        state = recents.existing(recents.load())
+        if not state["pins"] and not state["recents"]:
+            self.recent_menu.addAction("(no recent files)").setEnabled(False)
+            return
+        if state["pins"]:
+            pin_header = self.recent_menu.addAction("Pinned")
+            pin_header.setEnabled(False)
+            for path in state["pins"]:
+                act = self.recent_menu.addAction("📌 " + Path(path).name)
+                act.setToolTip(path)
+                act.triggered.connect(lambda _=False, p=path: self.open_path(p))
+            self.recent_menu.addSeparator()
+        for path in state["recents"]:
+            act = self.recent_menu.addAction(Path(path).name)
+            act.setToolTip(path)
+            act.triggered.connect(lambda _=False, p=path: self.open_path(p))
 
     def _make_tab(self, path: Path, kind: Kind) -> QWidget:
         """Build the viewer widget appropriate to *kind*.
@@ -179,7 +208,52 @@ class MainWindow(QMainWindow):
             widget.cleanup()          # archive tabs purge their scratch dir
         widget.deleteLater()
 
+    # --- session + tab context -------------------------------------------
+    def save_session(self) -> None:
+        """Persist the currently open file paths so they can be restored."""
+        paths = []
+        for i in range(self.tabs.count()):
+            p = getattr(self.tabs.widget(i), "path", None)
+            if isinstance(p, (str, Path)):
+                paths.append(str(p))
+        state = {"recents": recents.load()["recents"], "pins": recents.load()["pins"],
+                 "session": paths}
+        recents.save(state)
+
+    def restore_session(self) -> None:
+        """Re-open the files that were open when the app last closed."""
+        session = recents.load().get("session", [])
+        for p in session:
+            if Path(p).is_file():
+                self.open_path(p)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        tab = self.tabs.tabBar().tabAt(event.pos())
+        if tab < 0:
+            return
+        widget = self.tabs.widget(tab)
+        path = getattr(widget, "path", None)
+        if not isinstance(path, (str, Path)):
+            return
+        menu = QMenu(self)
+        pinned = str(path) in recents.load()["pins"]
+        if pinned:
+            menu.addAction("Unpin from recents", lambda: self._toggle_pin(path, False))
+        else:
+            menu.addAction("Pin to recents", lambda: self._toggle_pin(path, True))
+        menu.addSeparator()
+        menu.addAction("Close", lambda: self.close_tab(tab))
+        menu.exec(event.globalPosition().toPoint())
+
+    def _toggle_pin(self, path: str | Path, on: bool) -> None:
+        if on:
+            recents.pin(path)
+        else:
+            recents.unpin(path)
+        self._fill_recent_menu()
+
     def closeEvent(self, event) -> None:  # noqa: N802
+        self.save_session()
         while self.tabs.count():
             before = self.tabs.count()
             self.close_tab(self.tabs.currentIndex())
