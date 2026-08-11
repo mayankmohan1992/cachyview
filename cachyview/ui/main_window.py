@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         tools_menu = self.menuBar().addMenu("&Tools")
         act_batch = tools_menu.addAction("&Batch processing…", self.show_batch)
         act_batch.setShortcut(QKeySequence("Ctrl+B"))
+        tools_menu.addAction("&Compare PDFs…", self.show_compare)
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Dependency report", self.show_deps)
@@ -91,6 +92,12 @@ class MainWindow(QMainWindow):
         from .batch_panel import BatchDialog
         dialog = BatchDialog(self)
         dialog.show()
+
+    def show_compare(self) -> None:
+        """Open the side-by-side PDF comparison dialog."""
+        from .compare_dialog import CompareDialog
+        dialog = CompareDialog(self)
+        dialog.exec()
 
     def open_dialog(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Open files")

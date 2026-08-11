@@ -622,3 +622,25 @@ def test_outline_round_trip(tmp_path):
         ("Chapter 1", 1), ("Section 1.1", 1), ("Chapter 2", 2)}
     assert fitz.open(out).page_count == 2
 
+
+def test_diff_detects_changed_page(tmp_path):
+    base = tmp_path / "base.pdf"
+    make_pdf(base, pages=1, text="Hello")
+    changed = tmp_path / "changed.pdf"
+    make_pdf(changed, pages=1, text="Goodbye")
+    res = pdf.diff_pages(base, changed)
+    assert res["pages"] == 1
+    assert res["report"][0]["changed"] is True
+    assert res["report"][0]["diff_image"] is not None
+    assert res["report"][0]["diff_pct"] > 0
+
+
+def test_diff_identical_page(tmp_path):
+    a = tmp_path / "a.pdf"
+    make_pdf(a, pages=1, text="Same")
+    b = tmp_path / "b.pdf"
+    make_pdf(b, pages=1, text="Same")
+    res = pdf.diff_pages(a, b)
+    assert res["report"][0]["changed"] is False
+    assert res["report"][0]["diff_image"] is None
+

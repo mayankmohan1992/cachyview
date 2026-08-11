@@ -911,3 +911,59 @@ def ocr(path: str | os.PathLike, dest: str | os.PathLike, *,
     if ctx is not None:
         ctx.progress(100, "OCR complete")
     return out
+
+
+def diff_pages(a: str | os.PathLike, b: str | os.PathLike, *,
+               dpi: int = 150, password_a: str | None = None,
+               password_b: str | None = None) -> dict:
+    """Pixel-compare two PDFs page by page.
+
+    Returns ``{"pages": n, "identical": k, "report": [...]}`` where each
+    report entry is ``{"page": int, "changed": bool, "diff_pct": float,
+    "diff_image": str|None}``.  *diff_image* is the path to a red-on-black PNG
+    highlighting changed pixels, or ``None`` when the page is unchanged.
+    """
+    fitz = _fitz()
+    da = open_doc(a, password_a)
+    db = open_doc(b, password_b)
+    report: list[dict] = []
+    try:
+        import numpy as np
+        from PIL import Image
+        common = min(da.page_count, db.page_count)
+        for i in range(common):
+            pa = da[i]
+            pb_ = db[i]
+            ra = pa.get_pixmap(dpi=dpi)
+            rb = pb_.get_pixmap(dpi=dpi)
+            ia = Image.frombytes("RGB", (ra.width, ra.height), ra.samples)
+            ib = Image.frombytes("RGB", (rb.width, rb.height), rb.samples)
+            if ia.size != ib.size:
+                ib = ib.resize(ia.size)
+            arr_a = np.asarray(ia, dtype=np.int16)
+            arr_b = np.asarray(ib, dtype=np.int16)
+            diff = np.abs(arr_a - arr_b)
+            mask = (diff > 24).any(axis=2)
+            change = int(mask.sum())
+            total = ia.width * ia.height
+            pct = (change / total) * 100 if total else 0.0
+            changed = change > 0
+            diff_image = None
+            if changed:
+                out = Image.new("RGB", ia.size, (0, 0, 0))
+                px = out.load()
+                ys, xs = mask.nonzero()
+                for y, x in zip(ys.tolist(), xs.tolist()):
+                    px[x, y] = (220, 30, 30)
+                tmp = Path(a).with_name(f".diff-{i+1}.png")
+                out.save(tmp)
+                diff_image = str(tmp)
+            report.append({"page": i + 1, "changed": changed,
+                           "diff_pct": round(pct, 2), "diff_image": diff_image})
+        extra = abs(da.page_count - db.page_count)
+    finally:
+        da.close()
+        db.close()
+    return {"pages": common, "report": report, "extra": extra}
+
+
