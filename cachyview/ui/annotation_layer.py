@@ -23,7 +23,7 @@ class AnnotationLayer(QWidget):
         # Parent is the page label so geometry tracks the rendered pixmap.
         super().__init__(tab.page_label)
         self.tab = tab
-        self.mode = "off"            # off | highlight | underline | note
+        self.mode = "off"            # off | highlight | underline | note | redact
         self.color = (1.0, 0.85, 0.2)
         self.show_marks = True
 
@@ -127,6 +127,10 @@ class AnnotationLayer(QWidget):
             if not ok:
                 self.update()
                 return
+        elif self.mode == "redact":
+            self.tab.apply_redaction(pdf_rect)
+            self.update()
+            return
 
         self.tab.apply_annotation(self.mode, pdf_rect, self.color, text)
         self.update()

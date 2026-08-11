@@ -123,7 +123,8 @@ class PdfTab(QWidget):
         self.annot_action.setExclusive(True)
         for key, label in (("highlight", "Highlight"),
                             ("underline", "Underline"),
-                            ("note", "Note")):
+                            ("note", "Note"),
+                            ("redact", "Redact (permanent)")):
             act = QAction(label, self)
             act.setCheckable(True)
             act.setData(key)
@@ -423,6 +424,38 @@ class PdfTab(QWidget):
         self._page_cache.clear()
         self.annot_layer.refresh()
         self.status.setText(f"Added {kind} on page {self.page}.")
+
+    def apply_redaction(self, rect) -> None:
+        """Permanently remove content under *rect* on the current page.
+
+        Redaction is destructive and unrecoverable, so the user must confirm
+        explicitly before anything is written.
+        """
+        from ..backends import pdf as pdf_backend
+        from ..core.safe import replace_in_place
+
+        reply = QMessageBox.question(
+            self, "Permanent redaction",
+            "Redacting permanently deletes everything inside the selection — "
+            "text, images and vector art cannot be recovered. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        def write(tmp: Path) -> None:
+            pdf_backend.redact(self.path, tmp, [rect],
+                              password=self.password)
+
+        self.status.setText("Redacting…")
+        try:
+            replace_in_place(self.path, write)
+        except (pdf_backend.PdfError, OSError) as exc:
+            QMessageBox.critical(self, "Redaction failed", str(exc))
+            return
+        self._page_cache.clear()
+        self.annot_layer.refresh()
+        self.status.setText("Redacted — content permanently removed.")
 
     def keyPressEvent(self, a0) -> None:  # noqa: N802
         if a0 is not None and a0.key() == Qt.Key.Key_Escape \

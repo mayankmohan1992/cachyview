@@ -525,3 +525,35 @@ def test_flatten_bakes_annotations(tmp_path):
     assert "Page" in reopened.get_page_text(0)
     reopened.close()
 
+
+def test_redact_removes_underlying_text(tmp_path):
+    """Redaction must delete text under the rect, not merely cover it."""
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=1)
+    secret = tmp_path / "secret.pdf"
+    doc = fitz.open(src)
+    doc[0].insert_text((40, 40), "CONFIDENTIAL", fontsize=30)
+    doc.save(secret)
+    doc.close()
+
+    out = pdf.redact(secret, tmp_path / "red.pdf", [(10, 20, 350, 70)])
+    text = fitz.open(out).get_page_text(0)
+    assert "CONFIDENTIAL" not in text, "redacted text must be unrecoverable"
+    # The rest of the page survives.
+    assert "Page 1" in text
+
+
+def test_redact_leaves_other_text(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=1)
+    marked = tmp_path / "marked.pdf"
+    doc = fitz.open(src)
+    doc[0].insert_text((40, 300), "KEEPME", fontsize=30)
+    doc[0].insert_text((40, 40), "DROPME", fontsize=30)
+    doc.save(marked)
+    doc.close()
+    out = pdf.redact(marked, tmp_path / "red.pdf", [(10, 10, 350, 90)])
+    text = fitz.open(out).get_page_text(0)
+    assert "DROPME" not in text
+    assert "KEEPME" in text
+

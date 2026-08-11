@@ -514,14 +514,31 @@ def flatten(path: str | os.PathLike, dest: str | os.PathLike,
     return Path(dest)
 
 
-def unlock(path: str | os.PathLike, dest: str | os.PathLike,
-           password: str) -> Path:
-    """Write a decrypted copy.  Requires the correct password."""
-    pikepdf = _pikepdf()
-    src, out = Path(path), Path(dest)
-    with pikepdf.open(src, password=password or "") as doc:
-        doc.save(out)
-    return out
+def redact(path: str | os.PathLike, dest: str | os.PathLike,
+           rects: list[tuple[float, float, float, float]],
+           *, password: str | None = None,
+           fill: tuple[int, int, int] = (0, 0, 0)) -> Path:
+    """Permanently remove content under *rects* (true redaction).
+
+    Unlike a highlight/cover, redaction *deletes* the text and vector graphics
+    underneath and then paints the rectangle with *fill*, so the data cannot be
+    recovered by copying text or removing an overlay.  This is irreversible —
+    the caller must have confirmed with the user first.
+    """
+    fitz = _fitz()
+    doc = open_doc(path, password)
+    try:
+        for rect in rects:
+            r = fitz.Rect(*rect)
+            for page in doc:
+                if page.rect.intersects(r):
+                    page.add_redact_annot(r, fill=fill)
+        for page in doc:
+            page.apply_redactions()
+        doc.save(str(dest), garbage=3, deflate=True, clean=True)
+    finally:
+        doc.close()
+    return Path(dest)
 
 
 # --------------------------------------------------------------------------

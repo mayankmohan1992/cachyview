@@ -106,3 +106,30 @@ def test_escape_exits_annotation_mode(doc, app):
     assert layer.mode == "off"
     assert not tab.annot_btn.isChecked()
     tab.close()
+
+
+def test_redact_removes_text_when_confirmed(doc, app, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    # Auto-confirm the destructive action.
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **k: QMessageBox.StandardButton.Yes)
+    tab = PdfTab(doc)
+    # A rect covering the text region on page 1.
+    tab.apply_redaction((40, 70, 360, 110))
+    remaining = fitz.open(tab.path).get_page_text(0)
+    assert "Page 1 text here" not in remaining, "redacted text must be gone"
+    tab.close()
+
+
+def test_redact_aborts_when_declined(doc, app, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **k: QMessageBox.StandardButton.No)
+    tab = PdfTab(doc)
+    tab.apply_redaction((40, 70, 360, 110))
+    remaining = fitz.open(tab.path).get_page_text(0)
+    assert "Page 1 text here" in remaining, "declined redaction keeps text"
+    tab.close()
+
