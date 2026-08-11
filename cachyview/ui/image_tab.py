@@ -180,6 +180,15 @@ class ImageTab(QWidget):
         self._jobs: list = []
         self.current = self.original
 
+        # Replay any persisted edit stack so reopening resumes where left off.
+        from ..core import image_history as ih
+        self._history = ih
+        self._source_path = Path(path)  # original file the edits derive from
+        try:
+            self.ops = self._history.load(self._source_path)
+        except Exception:  # noqa: BLE001 - history is best-effort
+            self.ops = []
+
         self.canvas = ImageCanvas(self)
         self.canvas.inspect.readout.connect(self.inspect_readout)
         self.status = QLabel(self)
@@ -238,20 +247,35 @@ class ImageTab(QWidget):
 
         self._refresh()
 
+        # If a persisted edit stack was replayed, rebuild the preview now that
+        # the canvas exists.
+        if self.ops:
+            self._reapply()
+
     # --- edit stack ------------------------------------------------------
+    def _persist(self) -> None:
+        """Write the current edit stack to disk (best-effort)."""
+        try:
+            self._history.remember(self._source_path, self.ops)
+        except Exception:  # noqa: BLE001 - persistence must never block editing
+            pass
+
     def add_op(self, name: str, **args) -> None:
         self.ops.append(ib.Op(name, args))
         self._redo.clear()
+        self._persist()
         self._reapply()
 
     def undo(self) -> None:
         if self.ops:
             self._redo.append(self.ops.pop())
+            self._persist()
             self._reapply()
 
     def redo(self) -> None:
         if self._redo:
             self.ops.append(self._redo.pop())
+            self._persist()
             self._reapply()
 
     def lossless_rotate(self, angle: int) -> None:
@@ -279,6 +303,11 @@ class ImageTab(QWidget):
         self.info = ib.info(path)
         self.ops.clear()
         self._redo.clear()
+        try:
+            self._history.clear(self._source_path)
+        except Exception:  # noqa: BLE001
+            pass
+        self._source_path = Path(path)
         self.current = self.original.copy()
         self._refresh()
         self.modified_changed.emit(False)
@@ -403,6 +432,13 @@ class ImageTab(QWidget):
         self.original = self.current
         self.ops.clear()
         self._redo.clear()
+        # The edits are now baked into the file; drop the persisted stack and
+        # track any future edits against the newly saved file.
+        try:
+            self._history.clear(self._source_path)
+        except Exception:  # noqa: BLE001
+            pass
+        self._source_path = Path(target)
         self.modified_changed.emit(False)
         self.status.setText(f"Saved {target.name}")
         return True

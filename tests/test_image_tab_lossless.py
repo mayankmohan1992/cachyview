@@ -37,3 +37,32 @@ def test_lossless_rotate_reloads_exif_and_path(app, jpeg):
     assert tab.path == jpeg
     assert (tab.current.width, tab.current.height) == (100, 200)
     tab.close()
+
+
+def test_edit_history_persists_across_reopen(app, jpeg, tmp_path, monkeypatch):
+    # Isolate the history store so the test doesn't touch the real config.
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+    from cachyview.core import image_history as ih
+
+    tab = ImageTab(jpeg)
+    tab.add_op("rotate", angle=90)
+    tab.add_op("grayscale")
+    assert len(tab.ops) == 2
+    tab.close()
+
+    # A fresh tab on the same file should replay the stored stack.
+    tab2 = ImageTab(jpeg)
+    assert len(tab2.ops) == 2
+    assert [o.name for o in tab2.ops] == ["rotate", "grayscale"]
+    assert tab2.current.mode == "L"  # grayscale applied
+    tab2.close()
+
+    # Saving As bakes the edits and clears the persisted stack.
+    out = tmp_path / "baked.jpg"
+    tab3 = ImageTab(jpeg)
+    tab3.add_op("rotate", angle=90)
+    tab3._write(out)  # exercise the real write path without the file dialog
+    assert ih.load(jpeg) == []
+    tab3.close()
