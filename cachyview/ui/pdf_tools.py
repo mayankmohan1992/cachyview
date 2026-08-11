@@ -275,3 +275,8 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
             tab, "Redact",
             "Use the Annotate ▸ Redact (permanent) tool on the toolbar, then "
             "drag a box over the content to remove it permanently.")
+
+    elif name == "Bookmarks…":
+        from .outline_dialog import OutlineDialog
+        dialog = OutlineDialog(src, password=pw, parent=tab)
+        dialog.exec()

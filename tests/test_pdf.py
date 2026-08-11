@@ -607,3 +607,18 @@ def test_stamp_image_placed(tmp_path):
     # Image stamp should not corrupt the file and remains valid.
     assert fitz.open(out).page_count == 1
 
+
+def test_outline_round_trip(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2)
+    entries = [
+        {"title": "Chapter 1", "page": 1, "level": 0},
+        {"title": "Section 1.1", "page": 1, "level": 1},
+        {"title": "Chapter 2", "page": 2, "level": 0},
+    ]
+    out = pdf.set_outline(src, tmp_path / "out.pdf", entries)
+    items = pdf.get_outline(out)
+    assert {(i["title"], i["page"]) for i in items} == {
+        ("Chapter 1", 1), ("Section 1.1", 1), ("Chapter 2", 2)}
+    assert fitz.open(out).page_count == 2
+

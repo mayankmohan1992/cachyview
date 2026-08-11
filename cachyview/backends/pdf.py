@@ -662,6 +662,41 @@ def stamp(src: str | os.PathLike, dest: str | os.PathLike, *,
     return Path(dest)
 
 
+def get_outline(path: str | os.PathLike,
+                password: str | None = None) -> list[dict]:
+    """Return the document outline as a list of ``{title, page, level}`` dicts."""
+    fitz = _fitz()
+    doc = open_doc(path, password)
+    try:
+        toc = doc.get_toc(simple=True)
+        return [{"title": t, "page": p, "level": lvl} for lvl, t, p in toc]
+    finally:
+        doc.close()
+
+
+def set_outline(path: str | os.PathLike, dest: str | os.PathLike,
+                entries: list[dict], *, password: str | None = None) -> Path:
+    """Replace the whole document outline.
+
+    *entries* is a list of ``{"title": str, "page": int, "level": int}`` dicts
+    (1-based page, 0-based or 1-based level both accepted).
+    """
+    fitz = _fitz()
+    doc = open_doc(path, password)
+    try:
+        toc = [(max(1, int(e.get("level", 0)) + 1),
+                str(e.get("title", "")),
+                max(1, int(e.get("page", 1)))) for e in entries]
+        doc.set_toc(toc)
+        tmp = Path(dest).with_name(Path(dest).name + ".toc.tmp")
+        doc.save(str(tmp), garbage=3, deflate=True, clean=True)
+    finally:
+        doc.close()
+    if tmp.exists():
+        os.replace(tmp, dest)
+    return Path(dest)
+
+
 def unlock(path: str | os.PathLike, dest: str | os.PathLike,
            password: str) -> Path:
     """Write a decrypted copy.  Requires the correct password."""
