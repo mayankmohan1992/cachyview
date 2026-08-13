@@ -50,6 +50,36 @@ def _done_message(tab: QWidget, target: Path, extra: str = "") -> None:
         tab, "Finished", f"Saved to:\n{target}{extra}")
 
 
+def _run_in_place(tab, label: str, fn: Callable) -> None:
+    """Run *fn* on a worker thread and **replace the open file in place**.
+
+    Used for lightweight, Preview-style edits (rotate / delete / insert) that
+    should not spawn a new tab — the result is swapped into the current file
+    and the view reloads.  *fn* receives a temp path; it must write there.
+    """
+    from ..core.safe import replace_in_place
+    status = getattr(tab, "status", None)
+    if status is not None:
+        status.setText(f"{label}…")
+    src = Path(tab.path)
+
+    def work(ctx):
+        def write(tmp: Path) -> None:
+            fn(tmp, ctx)
+        replace_in_place(src, write)
+
+    job = submit(work, name=label)
+    getattr(tab, "_jobs", []).append(job)
+    if status is not None:
+        job.signals.progress.connect(lambda _p, m: status.setText(m or label))
+    job.signals.finished.connect(
+        lambda _r: (tab.reload_from(src),
+                    status.setText(f"{label} done") if status else None))
+    job.signals.failed.connect(
+        lambda msg, _t: QMessageBox.warning(tab, f"{label} failed", msg))
+    return job
+
+
 def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
     """Execute the named tool against ``tab.path``."""
     src: Path = tab.path

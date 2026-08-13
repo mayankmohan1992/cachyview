@@ -12,6 +12,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("files", nargs="*", help="files to open")
     parser.add_argument("--check-deps", action="store_true",
                         help="print the dependency report and exit")
+    parser.add_argument("--no-session", action="store_true",
+                        help="do not restore the previously open files")
     parser.add_argument("--install-integration", action="store_true",
                         help="add the launcher and Dolphin right-click actions")
     parser.add_argument("--uninstall-integration", action="store_true",
@@ -60,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     theming.apply_system_theme(app)
     window = MainWindow(args.files)
     window.show()
+    if not args.files and not args.no_session:
+        window.restore_session()
     return app.exec()
 
 

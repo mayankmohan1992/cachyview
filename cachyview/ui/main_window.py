@@ -56,9 +56,8 @@ class MainWindow(QMainWindow):
 
         for p in paths or []:
             self.open_path(p)
-        # If launched with no files, reopen what was open last session.
-        if not paths:
-            self.restore_session()
+        # Session restore is performed explicitly by main() on a real launch
+        # (it must NOT run every time a MainWindow is constructed, e.g. in tests).
 
     # --- menu ----------------------------------------------------------
     def _build_menu(self) -> None:

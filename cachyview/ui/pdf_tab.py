@@ -7,13 +7,14 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (QColorDialog, QComboBox, QHBoxLayout, QInputDialog,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QMenu, QMessageBox, QPushButton, QScrollArea,
-                             QSplitter, QToolBar, QToolButton, QVBoxLayout,
-                             QWidget)
+                             QMenu, QMessageBox, QFileDialog, QPushButton,
+                             QScrollArea, QSplitter, QToolBar, QToolButton,
+                             QVBoxLayout, QWidget)
 
 from ..backends import pdf as pb
 from ..core.jobs import submit
 from .annotation_layer import AnnotationLayer
+from .pdf_tools import run_tool, _run_in_place
 from .thumbnails import THUMB_WIDTH, ThumbnailLoader
 
 ZOOMS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
@@ -102,18 +103,19 @@ class PdfTab(QWidget):
         nav.addWidget(self.search_box)
 
         tools = QToolBar(self)
-        self.tool_box = QComboBox(self)
-        self.tool_box.addItems([
-            "Tools…", "Organise pages…", "Rotate pages", "Delete pages",
-            "Extract pages",
-            "Split", "Merge with…", "Compress", "Flatten", "Protect", "Unlock",
-            "Watermark", "Page numbers", "To images", "To text", "OCR",
-            "Repair", "Redact…", "Sign / Stamp", "Bookmarks…", "Metadata",
-        ])
-        self.tool_box.activated.connect(self._on_tool)
-        tools.addWidget(self.tool_box)
+        # Preview-style inline controls: instant, in-place, no new tab.
+        rot_l = tools.addAction("⟲", lambda: self.rotate_current(-90))
+        rot_l.setToolTip("Rotate left (counter-clockwise)")
+        rot_r = tools.addAction("⟳", lambda: self.rotate_current(90))
+        rot_r.setToolTip("Rotate right (clockwise)")
+        tools.addSeparator()
+        del_btn = tools.addAction("🗑", lambda: self.delete_current())
+        del_btn.setToolTip("Delete current page")
+        ins_btn = tools.addAction("⎄", lambda: self.insert_after())
+        ins_btn.setToolTip("Insert a page after this one")
+        tools.addSeparator()
 
-        # --- annotation controls
+        # Annotation controls, collapsed into a single popup button.
         self.annot_btn = QToolButton(self)
         self.annot_btn.setText("Annotate")
         self.annot_btn.setCheckable(True)
@@ -133,7 +135,8 @@ class PdfTab(QWidget):
         self.annot_btn.setMenu(self.annot_menu)
         self.annot_action.triggered.connect(self._on_annotate_mode)
         self.annot_color = QColor(255, 217, 51)
-        self.annot_color_btn = QPushButton("▮", self)
+        self.annot_color_btn = QToolButton(self)
+        self.annot_color_btn.setText("▮")
         self.annot_color_btn.setToolTip("Annotation colour")
         self.annot_color_btn.clicked.connect(self._pick_annot_color)
         self.show_marks_btn = QToolButton(self)
@@ -141,17 +144,34 @@ class PdfTab(QWidget):
         self.show_marks_btn.setCheckable(True)
         self.show_marks_btn.setChecked(True)
         self.show_marks_btn.toggled.connect(self._on_toggle_marks)
+        self.show_marks_btn.setToolTip("Show / hide annotations")
         tools.addWidget(self.annot_btn)
         tools.addWidget(self.annot_color_btn)
         tools.addWidget(self.show_marks_btn)
         tools.addSeparator()
-        self.present_btn = QPushButton("▶ Present", self)
+        self.present_btn = QToolButton(self)
+        self.present_btn.setText("▶ Present")
         self.present_btn.setToolTip(
             "Auto-advance pages on a timer (presentation / hands-free reading)")
         self.present_btn.setCheckable(True)
         self.present_btn.toggled.connect(self._toggle_present)
         tools.addWidget(self.present_btn)
         self._present_timer = None
+
+        # Heavy / less-common operations live in an overflow menu so the
+        # primary bar stays uncluttered.
+        overflow = QToolButton(self)
+        overflow.setText("Tools")
+        overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        over_menu = QMenu(self)
+        for name in ("Organise pages…", "Extract pages", "Split",
+                     "Merge with…", "Compress", "Flatten", "Protect",
+                     "Unlock", "Watermark", "Page numbers", "To images",
+                     "To text", "OCR", "Repair", "Sign / Stamp",
+                     "Bookmarks…", "Metadata"):
+            over_menu.addAction(name, lambda n=name: run_tool(self, n))
+        overflow.setMenu(over_menu)
+        tools.addWidget(overflow)
 
         self.status = QLabel(self)
 
@@ -198,6 +218,12 @@ class PdfTab(QWidget):
         self._fill_outline()
         self._fill_thumbs()
         self.go_to(min(self.page, self.info.page_count))
+
+    def reload_from(self, path: Path) -> None:
+        """Re-read the document after an in-place edit replaced the file."""
+        self.path = Path(path)
+        self.page = 1
+        self.reload(prompt=False)
 
     def _ask_password(self) -> bool:
         pw, ok = QInputDialog.getText(
@@ -468,13 +494,41 @@ class PdfTab(QWidget):
         super().keyPressEvent(a0)
 
     # --- tools -----------------------------------------------------------
-    def _on_tool(self, index: int) -> None:
-        name = self.tool_box.itemText(index)
-        self.tool_box.setCurrentIndex(0)
-        if index == 0:
+    # --- Preview-style inline page edits (in place, no new tab) ----------
+    def rotate_current(self, angle: int) -> None:
+        """Rotate the current page (and only it) in place."""
+        page = self.page
+        return _run_in_place(
+            self, "Rotating",
+            lambda tmp, ctx: pb.rotate_pages(
+                self.path, tmp, angle=angle, ranges=str(page),
+                password=self.password))
+
+    def delete_current(self) -> None:
+        """Delete the page currently shown."""
+        total = self.info.page_count if self.info else 0
+        if total <= 1:
+            QMessageBox.warning(self, "Cannot delete",
+                                "A PDF must keep at least one page.")
+            return None
+        page = self.page
+        return _run_in_place(
+            self, "Deleting page",
+            lambda tmp, ctx: pb.delete_pages(
+                self.path, tmp, str(page), password=self.password))
+
+    def insert_after(self) -> None:
+        """Insert a page (image or PDF) immediately after the current one."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Insert page", str(Path(self.path).parent),
+            "PDF or image (*.pdf *.png *.jpg *.jpeg *.webp *.bmp *.tiff)")
+        if not path:
             return
-        from .pdf_tools import run_tool
-        run_tool(self, name)
+        after = self.page
+        _run_in_place(
+            self, "Inserting page",
+            lambda tmp, ctx: pb.insert_pages(
+                self.path, tmp, path, after=after, password=self.password))
 
     # --- lifecycle -------------------------------------------------------
     def is_modified(self) -> bool:
