@@ -384,18 +384,22 @@ def reorder_pages(path: str | os.PathLike, dest: str | os.PathLike,
 
 @dataclass
 class Annotation:
-    """A markup annotation attached to a page of the document."""
+    """A markup annotation attached to a page of the document.
+
+    *kind* is one of: ``highlight``, ``underline``, ``strike``, ``note``,
+    ``rectangle``, ``oval``, ``line``, ``arrow``, ``sketch``.
+    ``rect`` is ``(x0, y0, x1, y1)`` in PDF points (y grows upward) and defines
+    the bounding box of every shape kind.  ``points`` is an optional list of
+    ``(x, y)`` vertices for polylines (``line``, ``arrow``, ``sketch``).
+    """
 
     page: int                 # 1-based
-    kind: str                # "highlight" | "underline" | "note"
+    kind: str                # "highlight" | "underline" | "strike" | "note"
+                             # | "rectangle" | "oval" | "line" | "arrow" | "sketch"
     rect: tuple[float, float, float, float]   # x0, y0, x1, y1 in PDF points
     color: tuple[float, float, float] = (1.0, 0.85, 0.2)   # RGB 0..1
     text: str = ""           # note body / comment
-
-
-def _rect_obj(rect):
-    from pikepdf import Rectangle
-    return Rectangle(rect[0], rect[1], rect[2], rect[3])
+    points: list[tuple[float, float]] = field(default_factory=list)
 
 
 def add_annotations(path: str | os.PathLike, dest: str | os.PathLike,
@@ -403,10 +407,11 @@ def add_annotations(path: str | os.PathLike, dest: str | os.PathLike,
                     password: str | None = None) -> Path:
     """Add markup annotations to pages.
 
-    Highlights and underlines carry a quad-points array covering the marked
-    text; notes are sticky text annotations.  Unlike Okular, the result is
-    stored *inside* the PDF, so the marks survive being emailed or opened in
-    another viewer.  Returns the output path.
+    Highlights and underlines (and strikethrough) carry a quad-points array
+    covering the marked text; notes are sticky text annotations; shapes and
+    lines are drawn annotation types.  Unlike Okular, the result is stored
+    *inside* the PDF, so the marks survive being emailed or opened in another
+    viewer.  Returns the output path.
     """
     pikepdf = _pikepdf()
     src, out = Path(path), Path(dest)
@@ -423,11 +428,27 @@ def add_annotations(path: str | os.PathLike, dest: str | os.PathLike,
                 Contents=pikepdf.String(ann.text or ""),
                 C=_color_array(ann.color),
             )
-            if ann.kind in ("highlight", "underline"):
+            if ann.kind in ("highlight", "underline", "strike"):
                 obj.QuadPoints = _quad_points(ann.rect)
             if ann.kind == "note":
                 obj.Name = pikepdf.Name("/Comment")
                 obj.Open = pikepdf.Name("/No")
+            if ann.kind in ("line", "arrow"):
+                obj.LE = pikepdf.Array([pikepdf.Name("/None"),
+                                        pikepdf.Name("/Arrow")]) if ann.kind == "arrow"\
+                    else pikepdf.Array([pikepdf.Name("/None"), pikepdf.Name("/None")])
+                if ann.points:
+                    obj.L = _line_points(ann.points)
+            if ann.kind in ("rectangle", "oval", "line", "arrow", "sketch"):
+                obj.BS = pikepdf.Dictionary(W=2)
+            if ann.kind == "oval":
+                # A circle annotation uses /Subtype /Circle with /Rect as the
+                # ellipse bounding box.
+                obj.Subtype = pikepdf.Name("/Circle")
+            if ann.kind == "sketch" and ann.points:
+                obj.Subtype = pikepdf.Name("/PolyLine")
+                obj.Vertices = _line_points(ann.points)
+                obj.BS = pikepdf.Dictionary(W=1.5)
             if "/Annots" not in page:
                 page.Annots = pikepdf.Array()
             page.Annots.append(obj)
@@ -435,14 +456,30 @@ def add_annotations(path: str | os.PathLike, dest: str | os.PathLike,
     return out
 
 
+def _rect_obj(rect):
+    from pikepdf import Rectangle
+    return Rectangle(rect[0], rect[1], rect[2], rect[3])
+
+
+def _line_points(points: list[tuple[float, float]]):
+    from pikepdf import Array
+    flat = []
+    for x, y in points:
+        flat.extend((float(x), float(y)))
+    return Array(flat)
+
+
 def _subtype(kind: str) -> str:
     return {"highlight": "Highlight", "underline": "Underline",
-            "note": "Text"}.get(kind, "Highlight")
+            "strike": "StrikeOut", "note": "Text",
+            "rectangle": "Square", "oval": "Circle",
+            "line": "Line", "arrow": "Line",
+            "sketch": "PolyLine"}.get(kind, "Highlight")
 
 
 def _color_array(color: tuple[float, float, float]):
     from pikepdf import Array
-    return Array(list(color))
+    return Array([float(c) for c in color])
 
 
 def _quad_points(rect) -> "Array":
@@ -451,7 +488,7 @@ def _quad_points(rect) -> "Array":
     x0, y0, x1, y1 = rect
     # PDF quad points are 8 numbers: (x,y) of each corner, top row first.
     pts = [x0, y1, x1, y1, x0, y0, x1, y0]
-    return Array(list(pts))
+    return Array(pts)
 
 
 def list_annotations(path: str | os.PathLike,
@@ -467,7 +504,8 @@ def list_annotations(path: str | os.PathLike,
             for ref in fors:
                 ann = ref.get_object() if hasattr(ref, "get_object") else ref
                 sub = str(ann.get("/Subtype", "")).lstrip("/")
-                if sub not in ("Highlight", "Underline", "Text"):
+                if sub not in ("Highlight", "Underline", "StrikeOut", "Text",
+                               "Square", "Circle", "Line", "PolyLine"):
                     continue
                 rect = ann.get("/Rect")
                 try:
@@ -483,11 +521,29 @@ def list_annotations(path: str | os.PathLike,
                         color = (float(cobj[0]), float(cobj[1]), float(cobj[2]))
                     except (TypeError, ValueError, IndexError):
                         pass
+                kind = {"Highlight": "highlight", "Underline": "underline",
+                        "StrikeOut": "strike", "Text": "note",
+                        "Square": "rectangle", "Circle": "oval",
+                        "Line": "line", "PolyLine": "sketch"}.get(sub, "highlight")
+                points: list[tuple[float, float]] = []
+                if kind in ("line", "arrow", "sketch"):
+                    raw = ann.get("/L") or ann.get("/Vertices")
+                    if raw is not None:
+                        try:
+                            pts = [float(v) for v in raw]
+                            points = [(pts[n], pts[n + 1])
+                                      for n in range(0, len(pts) - 1, 2)]
+                        except (TypeError, ValueError):
+                            points = []
+                    if kind == "line":
+                        le = ann.get("/LE")
+                        # A Line annotation whose end-cap is an arrow is our
+                        # "arrow"; a plain line keeps both caps /None.
+                        if le is not None and str(le[-1]).lstrip("/") == "Arrow":
+                            kind = "arrow"
                 out.append(Annotation(
-                    page=i + 1,
-                    kind={"Highlight": "highlight", "Underline": "underline",
-                          "Text": "note"}.get(sub, "highlight"),
-                    rect=r, color=color, text=text))
+                    page=i + 1, kind=kind, rect=r, color=color,
+                    text=text, points=points))
     return out
 
 
