@@ -29,11 +29,15 @@ archives. Password-protected archives are supported, including 7z with encrypted
 headers.
 
 ### PDF
-View with thumbnails, outline, text search and zoom. Tools: merge · split ·
-extract / delete / rotate / reorder pages · compress (4 Ghostscript tiers) ·
-AES-256 protect and unlock · repair · watermark · page numbers · metadata ·
-OCR (searchable text via tesseract) · convert to images or text · build from
-images.
+View with thumbnails + outline sidebar, text search and zoom. Markup (saved
+*inside* the PDF, so they survive emailing): highlight · underline ·
+strikethrough · rectangle · oval · line · arrow · freehand sketch · notes.
+Persisted signatures (draw once, click to place). Redaction (permanent content
+removal). Instant in-place page ops: rotate left/right, delete, insert; and
+multi-page delete/rotate/extract from a thumbnail selection. Tools menu: merge ·
+split · extract / reorder pages · compress (4 Ghostscript tiers) · AES-256
+protect and unlock · repair · watermark · page numbers · metadata · OCR
+(searchable text via tesseract) · convert to images or text · build from images.
 
 ### Images
 View with zoom, pan and EXIF. Edit non-destructively (every change is an
