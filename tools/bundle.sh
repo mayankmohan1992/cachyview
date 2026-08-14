@@ -9,8 +9,12 @@
 # Usage: tools/bundle.sh /path/to/output/cachyview
 set -euo pipefail
 
-OUT="$(readlink -f "${1:?usage: tools/bundle.sh <output-dir>}")"
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve the output directory without relying on readlink -f (which can return
+# empty for not-yet-created paths on some systems).
+RAW_OUT="${1:?usage: tools/bundle.sh <output-dir>}"
+mkdir -p "$RAW_OUT"
+OUT="$(cd "$RAW_OUT" && pwd -P)"
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PY="${PYTHON:-python3}"
 
 echo "→ Building CachyView bundle in: $OUT"
