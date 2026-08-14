@@ -26,7 +26,7 @@ jobs:
           python3 -m pip install ocrmypdf img2pdf
 
       - name: Build portable bundle
-        run: bash -x tools/bundle.sh "${{ github.workspace }}/dist/cachyview" 2>&1 | tail -60
+        run: bash -x tools/bundle.sh "${{ github.workspace }}/dist/cachyview"
 
       - name: Package bundle as tar.zst
         run: |
