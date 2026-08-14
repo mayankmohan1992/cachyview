@@ -1,55 +1,130 @@
 # CachyView
 
-A fast, native archive / PDF / image / text toolkit for CachyOS — the Preview.app
-and iLovePDF replacement that stays on your machine.
+**A fast, native archive · PDF · image · text toolkit for Linux — the
+lightweight, offline, privacy-first alternative to macOS Preview and the
+online "PDF toolbox" sites.**
 
-- **No network access.** Ever. No telemetry, no update pings.
-- **Native Qt 6**, not Electron. Starts fast, stays light.
-- **Everything scriptable**: the GUI, the `cachyview-cli` command and the Dolphin
-  right-click menu all call the same pure-Python backends.
+CachyView is built on **Qt 6** and **MuPDF**, not Electron. It starts in a
+fraction of a second, stays light on memory, and **never touches the network** —
+no telemetry, no update pings, no files uploaded. Everything runs locally on
+your machine.
 
-## Install
+- 🖼 **Images** — view, zoom, pan, EXIF; non-destructive edits (rotate, flip,
+  crop, resize, colour, annotate-as-preview) and batch convert.
+- 📕 **PDF** — thumbnails + outline sidebar, text search, zoom; rich markup
+  (highlight, underline, strikethrough, rectangle, oval, line, arrow, freehand
+  sketch, notes) saved *inside* the file so they survive emailing; redaction;
+  signatures; instant in-place rotate/delete/insert; multi-page
+  delete/rotate/extract from a thumbnail selection; and a Tools menu for
+  merge, split, compress, protect, OCR, watermark and more.
+- 🗜 **Archives** — browse zip/7z/rar/tar/iso/… as a tree, extract, test
+  integrity, create; sandbox-hardened extraction.
+- 📝 **Text** — syntax-aware editor with line numbers, find, pretty-printing
+  and encoding/line-ending detection.
+
+> Why "CachyView"? It started as a CachyOS-centric tool, but it runs on any
+> modern Linux desktop with Qt 6.
+
+---
+
+## Quick start (CachyOS / Arch)
 
 ```bash
-./install.sh              # user-only; no root, nothing outside ~/.local
-./install.sh --uninstall  # removes every file it created
+git clone https://github.com/mayankmohan1992/cachyview.git
+cd cachyview
+./install.sh            # user-only; no root, nothing outside ~/.local
 ```
 
-Then `cachyview <file>`, pick it from the application menu, or right-click a
-file in Dolphin.
+Then launch it from your application menu (**CachyView** under *Graphics*),
+run `cachyview <file>` from a terminal, or right-click a file in Dolphin.
 
-## Features
+To remove everything the installer created: `./install.sh --uninstall`.
 
-### Archives
-zip · 7z · rar (incl. RAR5) · tar/gz/bz2/xz/zst · iso · cab · deb · rpm
+### System dependencies (Arch / CachyOS)
 
-Browse as a tree with sizes and timestamps, filter, double-click a file to open
-it in the matching viewer, extract all or selected, test integrity, create new
-archives. Password-protected archives are supported, including 7z with encrypted
-headers.
+```bash
+sudo pacman -S --needed python python-pyqt6 python-pillow python-pymupdf \
+    python-pikepdf python-ocrmypdf img2pdf libvips 7zip unrar \
+    ghostscript qpdf poppler tesseract
+```
 
-### PDF
-View with thumbnails + outline sidebar, text search and zoom. Markup (saved
-*inside* the PDF, so they survive emailing): highlight · underline ·
-strikethrough · rectangle · oval · line · arrow · freehand sketch · notes.
-Persisted signatures (draw once, click to place). Redaction (permanent content
-removal). Instant in-place page ops: rotate left/right, delete, insert; and
-multi-page delete/rotate/extract from a thumbnail selection. Tools menu: merge ·
-split · extract / reorder pages · compress (4 Ghostscript tiers) · AES-256
-protect and unlock · repair · watermark · page numbers · metadata · OCR
-(searchable text via tesseract) · convert to images or text · build from images.
+`python-pyqt6` and `python-pillow` are required; the rest unlock optional
+features (PDF engine, OCR, compression tiers, archive formats). Missing tools
+are detected at runtime and only grey out the one feature that needs them.
 
-### Images
-View with zoom, pan and EXIF. Edit non-destructively (every change is an
-undoable operation applied to the original): rotate · flip · crop · resize ·
-scale · brightness · contrast · saturation · sharpness · grayscale · invert ·
-auto-contrast · blur · sharpen · border. Batch convert and combine into PDF.
+---
 
-### Text
-Syntax-aware editor with line numbers, find, JSON/XML pretty-printing, encoding
-and line-ending detection, and atomic saves.
+## Install on other Linux distributions
+
+CachyView is distro-agnostic — it needs Python 3.11+ and Qt 6. The
+`install.sh` script assumes an Arch-style layout (it uses a
+`--system-site-packages` venv so the **distro** PyQt6/Pillow are reused), which
+is the recommended setup on CachyOS. On other distributions:
+
+### Fedora
+
+```bash
+sudo dnf install python3-qt6 python3-pillow python3-PyMuPDF python3-pikepdf \
+    python3-ocrmypdf img2pdf vips-tools p7zip unrar ghostscript qpdf \
+    poppler-utils tesseract
+git clone https://github.com/mayankmohan1992/cachyview.git && cd cachyview
+python3 -m venv .venv --system-site-packages
+. .venv/bin/activate
+pip install -e .
+cachyview            # or: python -m cachyview
+```
+
+### Debian / Ubuntu (24.04+ for PyQt6)
+
+```bash
+sudo apt install python3-pyqt6 python3-pil python3-fitz python3-pikepdf \
+    ocrmypdf img2pdf libvips-tools p7zip-full unrar ghostscript qpdf \
+    poppler-utils tesseract-ocr
+git clone https://github.com/mayankmohan1992/cachyview.git && cd cachyview
+python3 -m venv .venv --system-site-packages
+. .venv/bin/activate
+pip install -e .
+cachyview
+```
+
+> **Note on PyQt6 from pip:** if your distro does not package PyQt6 (or you
+> prefer a self-contained install), you may `pip install pyqt6 pillow` into a
+> normal venv instead of using `--system-site-packages`. The app behaves
+> identically; you just trade the distro build for a pip one.
+
+### From the GitHub Releases page
+
+Each release on the
+[Releases tab](https://github.com/mayankmohan1992/cachyview/releases) ships a
+ready-to-run bundle:
+
+1. Download `cachyview-<version>-linux.tar.zst`.
+2. Extract it: `tar --zstd -xf cachyview-*.tar.zst`.
+3. Run `./cachyview/cachyview` (or copy it somewhere on your `PATH`).
+
+The bundle is fully portable and needs only the runtime libraries listed above.
+
+---
+
+## Build from source
+
+For development or packaging:
+
+```bash
+python3 -m venv .venv --system-site-packages
+. .venv/bin/activate
+pip install -e ".[dev]"     # adds pytest
+pytest                      # headless test suite, ~450 tests
+```
+
+The GUI is exercised headlessly in CI; no display is required to run the
+tests.
+
+---
 
 ## Command line
+
+The same backends power a CLI (`cachyview-cli`):
 
 ```bash
 cachyview-cli list archive.7z
@@ -61,13 +136,9 @@ cachyview-cli image convert *.heic -f jpg --resize 1920
 cachyview-cli image to-pdf page*.png -o album.pdf
 ```
 
-## Test
+Run `cachyview-cli --help` for the full list.
 
-```bash
-pytest                          # self-configuring; runs headless
-python tools/shot.py out/       # render each viewer for visual review
-cachyview --check-deps          # what optional features are available
-```
+---
 
 ## Design rules
 
@@ -89,7 +160,9 @@ can read a password from a pipe — both demand a terminal — so there is no be
 option short of bundling our own crypto. Plain zips handled by the built-in
 Python fallback never expose the password.
 
-## Layout
+---
+
+## Project layout
 
 ```
 cachyview/
@@ -97,5 +170,15 @@ cachyview/
   backends/     archive, image, pdf, text   (no Qt, importable anywhere)
   ui/           main window and one tab per file kind, plus tool dialogs
   integration/  CLI, .desktop entry, Dolphin service menus
-tests/          301 tests against real files
+tests/          ~450 tests against real files
 ```
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and PRs are welcome.
+
+## License
+
+[MIT](LICENSE). CachyView is free software.

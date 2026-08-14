@@ -7,6 +7,8 @@ ImportError about a compiled module built for a different ABI.
 import os
 import shutil
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -68,9 +70,16 @@ def test_child_imports_work_under_foreign_pythonpath(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(not shutil.which("ocrmypdf"), reason="needs ocrmypdf")
 def test_ocrmypdf_survives_foreign_pythonpath(monkeypatch):
-    """The exact failure that motivated this module."""
-    monkeypatch.setenv("PYTHONPATH",
-                       "/home/mm/.hermes/hermes-agent/venv/lib/python3.11/site-packages")
+    """The exact failure that motivated this module.
+
+    A decoy foreign site-packages on PYTHONPATH must not shadow the real
+    dependencies of an external tool like ocrmypdf.
+    """
+    decoy = (Path(tempfile.gettempdir()) / "cachyview-foreign-site-packages")
+    decoy.mkdir(parents=True, exist_ok=True)
+    (decoy / "PIL").mkdir(exist_ok=True)
+    (decoy / "PIL" / "__init__.py").write_text("raise ImportError('decoy')")
+    monkeypatch.setenv("PYTHONPATH", str(decoy))
     res = run(["ocrmypdf", "--version"], timeout=60)
     assert res.returncode == 0, res.stderr
     # ocrmypdf prints its version on stderr, not stdout.

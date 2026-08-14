@@ -1,0 +1,18 @@
+name: Feature request
+description: Suggest an idea for CachyView
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem would this solve? What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should it work? Any references (e.g. how Preview.app does it)?
+    validations:
+      required: false

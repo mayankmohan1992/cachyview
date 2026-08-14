@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system Qt + GL libraries + helpers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-pyqt6 libgl1 libegl1 libglib2.0-0 \
+            ghostscript qpdf poppler-utils tesseract-ocr \
+            7zip p7zip-full unrar zstd
+          python3 -m pip install --upgrade pip
+          python3 -m pip install ocrmypdf img2pdf
+
+      - name: Build portable bundle
+        run: bash tools/bundle.sh "${{ github.workspace }}/dist/cachyview"
+
+      - name: Package bundle as tar.zst
+        run: |
+          cd "${{ github.workspace }}/dist"
+          tar --zstd -cf "cachyview-${GITHUB_REF_NAME#v}-linux.tar.zst" cachyview
+          sha256sum "cachyview-${GITHUB_REF_NAME#v}-linux.tar.zst" \
+            > "cachyview-${GITHUB_REF_NAME#v}-linux.tar.zst.sha256"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "CachyView $VERSION" \
+            --generate-notes \
+            "${{ github.workspace }}/dist/cachyview-${VERSION}-linux.tar.zst" \
+            "${{ github.workspace }}/dist/cachyview-${VERSION}-linux.tar.zst.sha256"
