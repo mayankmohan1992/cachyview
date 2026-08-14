@@ -18,10 +18,12 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 
 # 1. App sources + packaging metadata
-cp -r "$SRC_DIR/cachyview" "$OUT/cachyview"
-cp "$SRC_DIR/pyproject.toml" "$OUT/pyproject.toml"
-cp "$SRC_DIR/LICENSE" "$OUT/LICENSE" 2>/dev/null || true
-cp "$SRC_DIR/README.md" "$OUT/README.md" 2>/dev/null || true
+APP="$OUT/app"
+mkdir -p "$APP"
+cp -r "$SRC_DIR/cachyview" "$APP/cachyview"
+cp "$SRC_DIR/pyproject.toml" "$APP/pyproject.toml"
+cp "$SRC_DIR/LICENSE" "$APP/LICENSE" 2>/dev/null || true
+cp "$SRC_DIR/README.md" "$APP/README.md" 2>/dev/null || true
 
 # 2. Self-contained virtualenv with PyQt6 from PyPI
 "$PY" -m venv "$OUT/venv"
@@ -32,7 +34,7 @@ VENV_PY="$OUT/venv/bin/python"
 
 # 3. Put the app on the venv import path via a .pth (no build backend needed)
 SITE_DIR="$("$VENV_PY" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
-echo "$OUT" > "$SITE_DIR/cachyview.pth"
+echo "$APP" > "$SITE_DIR/cachyview.pth"
 "$VENV_PY" -c "import cachyview" || { echo "app not importable"; exit 1; }
 
 # 4. Launcher scripts (strip foreign env vars that can break PyQt/Pillow)
