@@ -36,7 +36,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev,pdf]"
           # Provide the external helpers the tools shell out to.
-          python -m pip install ocrmypdf img2pdf zstandard pytest-xdist
+          python -m pip install ocrmypdf img2pdf zstandard
 
       - name: Run tests
-        run: xvfb-run -a pytest -q -n auto
+        run: xvfb-run -a pytest -q
