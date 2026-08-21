@@ -10,9 +10,6 @@ from cachyview.backends import pdf as pb
 from cachyview.ui.compare_dialog import CompareDialog
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _make(text, tmp_path, name):

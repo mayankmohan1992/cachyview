@@ -8,9 +8,6 @@ from cachyview.ui.main_window import MainWindow
 from cachyview.core import recents
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(autouse=True)

@@ -11,9 +11,6 @@ from cachyview.ui.pdf_tab import PdfTab
 from cachyview.ui import pdf_tab as pdf_tab_module
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

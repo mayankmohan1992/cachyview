@@ -9,9 +9,6 @@ from cachyview.ui import theming
 from cachyview.ui.pdf_tab import PdfTab
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def test_format_shortcuts_includes_core_bindings():

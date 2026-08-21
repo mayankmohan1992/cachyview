@@ -9,9 +9,6 @@ from cachyview.ui.main_window import MainWindow, PlaceholderTab
 from cachyview.ui.text_tab import TextTab
 
 
-@pytest.fixture(scope="session")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

@@ -14,9 +14,6 @@ fitz = pytest.importorskip("fitz")
 from cachyview.ui.pdf_tab import PdfTab  # noqa: E402
 
 
-@pytest.fixture(scope="session")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

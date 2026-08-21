@@ -12,9 +12,6 @@ fitz = pytest.importorskip("fitz")
 pytest.importorskip("pikepdf")
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

@@ -9,9 +9,6 @@ from cachyview.core.sandbox import Sandbox
 from cachyview.ui.archive_drag import DraggableArchiveTree
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

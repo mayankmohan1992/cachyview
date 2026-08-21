@@ -8,9 +8,6 @@ from PyQt6.QtWidgets import QApplication
 from cachyview.ui.image_tab import ImageTab
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

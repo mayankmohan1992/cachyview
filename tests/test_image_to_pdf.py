@@ -10,9 +10,6 @@ from cachyview.ui.image_to_pdf import ImageToPdfDialog
 from cachyview.backends import image as ib
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication([])
 
 
 @pytest.fixture

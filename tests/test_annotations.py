@@ -12,9 +12,6 @@ from cachyview.ui.annotation_layer import AnnotationLayer
 from cachyview.ui.pdf_tab import PdfTab
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

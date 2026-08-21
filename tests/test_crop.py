@@ -15,9 +15,6 @@ from cachyview.ui.crop_overlay import CropOverlay
 from cachyview.ui.image_tab import ImageTab
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

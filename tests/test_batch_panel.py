@@ -10,9 +10,6 @@ from cachyview.ui.batch_panel import BatchPanel
 from cachyview.backends import image as ib
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

@@ -15,9 +15,6 @@ from cachyview.backends import pdf as pb
 from cachyview.ui.pdf_tools import _run_in_place
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

@@ -15,9 +15,6 @@ from cachyview.ui.thumbnails import THUMB_WIDTH, ThumbnailLoader
 fitz = pytest.importorskip("fitz")
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

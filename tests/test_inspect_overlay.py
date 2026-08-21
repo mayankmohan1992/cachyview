@@ -10,9 +10,6 @@ from cachyview.ui.image_tab import ImageTab
 from cachyview.ui.inspect_overlay import InspectOverlay
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

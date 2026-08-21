@@ -17,3 +17,17 @@ os.environ.setdefault("XDG_CONFIG_HOME", os.path.join(
     os.environ.get("TMPDIR", "/tmp"), "cachyview-pytest-config"))
 
 import cachyview  # noqa: E402,F401  (import for its sys.path guard side effect)
+
+# One QApplication for the entire suite.  Creating/destroying multiple
+# QApplication instances across test modules in a single process crashes Qt
+# (segfault, exit 139) — so every GUI test reuses this single instance.
+import pytest
+from PyQt6.QtWidgets import QApplication
+
+
+@pytest.fixture(scope="session")
+def app():
+    existing = QApplication.instance()
+    if existing is None:
+        existing = QApplication([])
+    yield existing
