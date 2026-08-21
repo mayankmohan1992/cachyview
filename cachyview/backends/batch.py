@@ -124,12 +124,28 @@ def _image_op(tool: str, op: dict[str, Any], stage: Path,
         out = stage.with_name(f".batch-{stage.stem}{stage.suffix}")
         return ib.save(img, out, source=img)
     if tool == "resize":
+        if opts.get("factor"):
+            img = ib.apply_ops(img, [ib.Op("scale", {"factor": float(opts["factor"])})],
+                               ctx=ctx)
+        else:
+            img = ib.apply_ops(img,
+                               [ib.Op("resize", {"width": int(opts.get("width") or 0) or None,
+                                                  "height": int(opts.get("height") or 0) or None})],
+                               ctx=ctx)
+        out = stage.with_name(f".batch-{stage.stem}{stage.suffix}")
+        return ib.save(img, out, source=img)
+    if tool == "scale":
         img = ib.apply_ops(img,
-                           [ib.Op("resize", {"width": int(opts.get("width", 0)),
-                                              "height": int(opts.get("height", 0))})],
+                           [ib.Op("scale", {"factor": float(opts.get("factor", 0.5))})],
                            ctx=ctx)
         out = stage.with_name(f".batch-{stage.stem}{stage.suffix}")
         return ib.save(img, out, source=img)
+    if tool == "ops":
+        ops = [ib.Op(o["name"], o.get("args") or {}) for o in opts.get("chain", [])]
+        img = ib.apply_ops(img, ops, ctx=ctx)
+        out = stage.with_name(f".batch-{stage.stem}{stage.suffix}")
+        keep = opts.get("keep_exif", True)
+        return ib.save(img, out, source=img, keep_exif=keep)
     if tool == "convert":
         fmt = opts.get("format", "png").lower()
         ext = ".jpg" if fmt == "jpeg" else f".{fmt}"

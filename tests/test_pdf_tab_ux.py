@@ -27,6 +27,16 @@ def doc(tmp_path):
     return p
 
 
+def test_sidebar_has_contents_tab(doc, app):
+    tab = PdfTab(doc)
+    assert tab.side_tabs.count() == 2
+    assert tab.side_tabs.tabText(0) == "Pages"
+    assert tab.side_tabs.tabText(1) == "Contents"
+    tab.side_tabs.setCurrentIndex(1)
+    assert tab.side_tabs.currentIndex() == 1
+    tab.close()
+
+
 def test_sidebar_toggle(doc, app):
     tab = PdfTab(doc)
     tab.show()
@@ -114,3 +124,62 @@ def test_ranges_label():
     assert pdf_tab_module._ranges_label([1, 2, 3]) == "1-3"
     assert pdf_tab_module._ranges_label([1, 3, 4, 5, 7]) == "1,3-5,7"
     assert pdf_tab_module._ranges_label([]) == ""
+
+
+def test_outline_click_jumps_to_page(tmp_path, app):
+    d = fitz.open()
+    for _ in range(4):
+        d.new_page(width=200, height=200)
+    d.set_toc([(1, "Chapter two", 2), (1, "Chapter four", 4)])
+    src = tmp_path / "toc.pdf"
+    d.save(src)
+    d.close()
+    tab = PdfTab(src)
+    assert tab.outline.count() == 2
+    tab.outline.itemClicked.emit(tab.outline.item(0))
+    assert tab.page == 2
+    tab.outline.itemClicked.emit(tab.outline.item(1))
+    assert tab.page == 4
+    tab.close()
+
+
+def test_first_page_renders_without_thumb_click(doc, app):
+    tab = PdfTab(doc)
+    QApplication.processEvents()
+    assert tab.strip.has_pixmap(1)
+    pix = tab.page_label.pixmap()
+    assert pix is not None and not pix.isNull()
+    tab.close()
+
+
+def test_layout_modes_rebuild(doc, app):
+    tab = PdfTab(doc)
+    tab.strip.set_layout_mode("single")
+    assert tab.strip.layout_mode == "single"
+    assert len(tab.strip._geoms) == 1
+    tab.strip.set_layout_mode("facing")
+    assert tab.strip._geoms
+    tab.strip.set_layout_mode("continuous")
+    assert len(tab.strip._geoms) == 3
+    tab.close()
+
+
+def test_text_select_copies_words(tmp_path, app):
+    d = fitz.open()
+    page = d.new_page(width=400, height=400)
+    page.insert_text((50, 80), "HelloWorld", fontsize=20)
+    src = tmp_path / "words.pdf"
+    d.save(src)
+    d.close()
+    tab = PdfTab(src)
+    QApplication.processEvents()
+    view = tab.strip
+    view._ensure_words(1)
+    words = view._words.get(1) or []
+    assert words, "MuPDF should return word boxes"
+    g = view._geoms[0]
+    view._sel_page = 1
+    view._sel_words = view._words_in_rect(
+        1, QPoint(g.x, g.y), QPoint(g.x + g.w, g.y + g.h))
+    assert view._sel_words
+    tab.close()

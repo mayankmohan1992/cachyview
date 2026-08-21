@@ -201,6 +201,82 @@ def extract_text(path: str | os.PathLike, pages: Iterable[int] | None = None,
         doc.close()
 
 
+def page_words(path: str | os.PathLike, page: int,
+               password: str | None = None) -> list[tuple[float, float, float, float, str]]:
+    """Word boxes on a 1-based page: (x0, y0, x1, y1, word) in PDF points."""
+    doc = open_doc(path, password)
+    try:
+        if not 1 <= page <= doc.page_count:
+            raise PdfError(f"Page {page} is outside 1-{doc.page_count}.")
+        words = doc[page - 1].get_text("words") or []
+        return [(float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4]))
+                for w in words]
+    finally:
+        doc.close()
+
+
+def search_text(path: str | os.PathLike, needle: str, *,
+                password: str | None = None
+                ) -> list[tuple[int, tuple[float, float, float, float]]]:
+    """All hits of *needle*: (1-based page, rect xyxy in PDF points)."""
+    if not needle.strip():
+        return []
+    doc = open_doc(path, password)
+    hits: list[tuple[int, tuple[float, float, float, float]]] = []
+    try:
+        for i in range(doc.page_count):
+            for rect in doc[i].search_for(needle) or []:
+                hits.append((i + 1, (float(rect.x0), float(rect.y0),
+                                     float(rect.x1), float(rect.y1))))
+    finally:
+        doc.close()
+    return hits
+
+
+def list_form_fields(path: str | os.PathLike,
+                     password: str | None = None) -> list[dict]:
+    doc = open_doc(path, password)
+    fields: list[dict] = []
+    try:
+        for i in range(doc.page_count):
+            widgets = doc[i].widgets()
+            if not widgets:
+                continue
+            for w in widgets:
+                fields.append({
+                    "page": i + 1,
+                    "name": w.field_name or "",
+                    "value": "" if w.field_value is None else str(w.field_value),
+                    "type": getattr(w, "field_type_string", "") or "",
+                })
+    finally:
+        doc.close()
+    return fields
+
+
+def fill_form_fields(path: str | os.PathLike, dest: str | os.PathLike,
+                     values: dict[str, str], *,
+                     password: str | None = None) -> Path:
+    doc = open_doc(path, password)
+    out = Path(dest)
+    try:
+        for i in range(doc.page_count):
+            widgets = doc[i].widgets()
+            if not widgets:
+                continue
+            for w in widgets:
+                name = w.field_name or ""
+                if name in values:
+                    w.field_value = values[name]
+                    w.update()
+        doc.save(str(out), incremental=False, encryption=0)
+    except Exception as exc:
+        raise PdfError(f"Could not fill form: {exc}") from exc
+    finally:
+        doc.close()
+    return out
+
+
 # --------------------------------------------------------------------------
 # structural operations (lossless, via pikepdf)
 # --------------------------------------------------------------------------
@@ -400,6 +476,7 @@ class Annotation:
     color: tuple[float, float, float] = (1.0, 0.85, 0.2)   # RGB 0..1
     text: str = ""           # note body / comment
     points: list[tuple[float, float]] = field(default_factory=list)
+    saved: bool = False  # True when the mark already lives in the file
 
 
 def add_annotations(path: str | os.PathLike, dest: str | os.PathLike,
@@ -543,7 +620,65 @@ def list_annotations(path: str | os.PathLike,
                             kind = "arrow"
                 out.append(Annotation(
                     page=i + 1, kind=kind, rect=r, color=color,
-                    text=text, points=points))
+                    text=text, points=points, saved=True))
+    return out
+
+
+def _rect_close(a, b, tol: float = 1.5) -> bool:
+    return all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def remove_annotation(path: str | os.PathLike, dest: str | os.PathLike,
+                      page: int, rect: tuple[float, float, float, float],
+                      password: str | None = None) -> Path:
+    """Delete the first annotation on *page* whose /Rect matches *rect*."""
+    pikepdf = _pikepdf()
+    src, out = Path(path), Path(dest)
+    with pikepdf.open(src, password=password or "") as doc:
+        if not 1 <= page <= len(doc.pages):
+            raise PdfError(f"Page {page} is outside this document.")
+        annots = doc.pages[page - 1].get("/Annots")
+        if annots:
+            keep = []
+            dropped = False
+            for ref in annots:
+                obj = ref.get_object() if hasattr(ref, "get_object") else ref
+                raw = obj.get("/Rect")
+                try:
+                    r = (float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3]))
+                except (TypeError, ValueError, IndexError):
+                    keep.append(ref)
+                    continue
+                if not dropped and _rect_close(r, rect):
+                    dropped = True
+                    continue
+                keep.append(ref)
+            doc.pages[page - 1]["/Annots"] = pikepdf.Array(keep)
+        doc.save(out)
+    return out
+
+
+def recolor_annotation(path: str | os.PathLike, dest: str | os.PathLike,
+                       page: int, rect: tuple[float, float, float, float],
+                       color: tuple[float, float, float],
+                       password: str | None = None) -> Path:
+    """Set the /C colour of the annotation matching *rect* on *page*."""
+    pikepdf = _pikepdf()
+    src, out = Path(path), Path(dest)
+    with pikepdf.open(src, password=password or "") as doc:
+        annots = doc.pages[page - 1].get("/Annots") if 1 <= page <= len(doc.pages) else None
+        if annots:
+            for ref in annots:
+                obj = ref.get_object() if hasattr(ref, "get_object") else ref
+                raw = obj.get("/Rect")
+                try:
+                    r = (float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3]))
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if _rect_close(r, rect):
+                    obj["/C"] = _color_array(color)
+                    break
+        doc.save(out)
     return out
 
 
@@ -935,6 +1070,108 @@ def add_page_numbers(path: str | os.PathLike, dest: str | os.PathLike, *,
     finally:
         doc.close()
     return Path(dest)
+
+
+# Standard page sizes in points (1 pt = 1/72 inch).
+PAGE_SIZES = {
+    "A4": (595, 842),
+    "Letter": (612, 792),
+    "Legal": (612, 1008),
+    "A3": (842, 1191),
+    "A5": (420, 595),
+}
+
+
+def crop_resize_pages(path: str | os.PathLike, dest: str | os.PathLike, *,
+                      margins: tuple[float, float, float, float] | None = None,
+                      page_size: str | None = None,
+                      password: str | None = None) -> Path:
+    """Crop page margins and/or resize the media box to a standard size.
+
+    *margins* is (left, top, right, bottom) in points, trimmed from the
+    existing media box.  *page_size* is a key from ``PAGE_SIZES``; when given
+    the media box is set to that size (content is not scaled, only the
+    page frame changes) — useful for normalising scans to A4/Letter.
+    """
+    doc = open_doc(path, password)
+    fitz = _fitz()
+    try:
+        for page in doc:
+            mb = page.mediabox
+            if margins:
+                l, t, r, b = margins
+                page.set_cropbox(fitz.Rect(
+                    float(mb.x0) + l, float(mb.y0) + b,
+                    float(mb.x1) - r, float(mb.y1) - t))
+            if page_size:
+                w, h = PAGE_SIZES[page_size]
+                page.set_mediabox(fitz.Rect(0, 0, w, h))
+        doc.save(str(dest), garbage=3, deflate=True, clean=True)
+    finally:
+        doc.close()
+    return Path(dest)
+
+
+def invert_colours(path: str | os.PathLike, dest: str | os.PathLike, *,
+                   zoom: float = 2.0, password: str | None = None) -> Path:
+    """Produce a colour-inverted (dark-mode) copy of every page.
+
+    ponytail: rasterises each page then covers it with the inverted image, so
+    the result is pixel-based rather than vector. Good enough for reading; a
+    true vector invert would require rebuilding page content.
+    """
+    from io import BytesIO
+    from PIL import Image, ImageChops
+    fitz = _fitz()
+    doc = open_doc(path, password)
+    try:
+        for page in doc:
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            img = Image.frombytes("RGB", (pix.width, pix.height),
+                                  pix.samples).convert("RGB")
+            inv = ImageChops.invert(img)
+            buf = BytesIO()
+            inv.save(buf, "PNG")
+            page.insert_image(page.rect, stream=buf.getvalue())
+        doc.save(str(dest), garbage=3, deflate=True, clean=True)
+    finally:
+        doc.close()
+    return Path(dest)
+
+
+def add_headers_footers(path: str | os.PathLike, dest: str | os.PathLike, *,
+                        header: str = "", footer: str = "",
+                        page_numbers: bool = False, size: int = 10,
+                        password: str | None = None) -> Path:
+    """Stamp header and/or footer text on every page, optionally numbered."""
+    doc = open_doc(path, password)
+    try:
+        for i, page in enumerate(doc):
+            if header:
+                page.insert_text((size, size * 1.4), header,
+                                 fontsize=size, fontname="helv")
+            foot = footer
+            if page_numbers:
+                foot = f"{foot}  ·  {i + 1}" if foot else str(i + 1)
+            if foot:
+                page.insert_text((size, page.rect.height - size * 1.6),
+                                 foot, fontsize=size, fontname="helv")
+        doc.save(str(dest), garbage=3, deflate=True)
+    finally:
+        doc.close()
+    return Path(dest)
+
+
+def fingerprint(path: str | os.PathLike) -> dict[str, str]:
+    """SHA-256 / SHA-1 / MD5 hex digests of the file (verify integrity)."""
+    import hashlib
+    sums = {"sha256": hashlib.sha256(), "sha1": hashlib.sha1(),
+            "md5": hashlib.md5()}
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            for h in sums.values():
+                h.update(chunk)
+    return {k: v.hexdigest() for k, v in sums.items()}
 
 
 def set_metadata(path: str | os.PathLike, dest: str | os.PathLike,

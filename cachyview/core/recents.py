@@ -7,13 +7,15 @@ until the user removes them.  No network, no telemetry — just a local file.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 MAX_RECENTS = 25
 
 
 def _store_dir() -> Path:
-    base = Path.home() / ".config" / "cachyview"
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) / "cachyview" if xdg else Path.home() / ".config" / "cachyview"
     base.mkdir(parents=True, exist_ok=True)
     return base
 

@@ -218,7 +218,7 @@ def fake_home(tmp_path, monkeypatch):
 
 def test_install_creates_files(fake_home):
     written = desktop.install("cachyview", "cachyview-cli", refresh=False)
-    assert len(written) == 4
+    assert len(written) == 5
     assert all(p.is_file() for p in written)
     assert (fake_home / "applications" / "cachyview.desktop").is_file()
     menus = fake_home / "kio" / "servicemenus"
@@ -267,7 +267,7 @@ def test_every_action_has_a_definition(fake_home):
 def test_uninstall_removes_everything(fake_home):
     desktop.install(refresh=False)
     removed = desktop.uninstall(refresh=False)
-    assert len(removed) == 4
+    assert len(removed) == 5
     assert not any(p.exists() for p in desktop.paths().values())
     assert desktop.uninstall(refresh=False) == []
 

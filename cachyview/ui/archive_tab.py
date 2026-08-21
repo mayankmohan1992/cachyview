@@ -5,9 +5,9 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QAbstractItemView, QFileDialog, QHeaderView,
-                             QInputDialog, QLabel, QLineEdit, QMessageBox,
-                             QToolBar, QTreeWidget, QTreeWidgetItem,
-                             QVBoxLayout, QWidget)
+                             QInputDialog, QLabel, QLineEdit,
+                             QMenu, QMessageBox, QSplitter, QToolBar, QToolButton,
+                             QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..backends import archive as ar
 from ..core.jobs import submit
@@ -39,8 +39,8 @@ class ArchiveTab(QWidget):
         self._jobs: list = []
 
         self.tree = DraggableArchiveTree(self)
-        self.tree.setColumnCount(4)
-        self.tree.setHeaderLabels(["Name", "Size", "Packed", "Modified"])
+        self.tree.setColumnCount(6)
+        self.tree.setHeaderLabels(["Name", "Size", "Packed", "Ratio", "CRC", "Modified"])
         self.tree.setSortingEnabled(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(
@@ -57,20 +57,44 @@ class ArchiveTab(QWidget):
 
         self.status = QLabel("Loading…", self)
 
+        from .icons import add_action, icon_button, style_bar
+
         bar = QToolBar(self)
-        bar.addAction("Extract All…", self.extract_all)
-        bar.addAction("Extract Selected…", self.extract_selected)
+        style_bar(bar)
+        add_action(bar, "archive-extract", "Extract All…", self.extract_all)
+        add_action(bar, "document-export", "Extract Selected…",
+                   self.extract_selected)
         bar.addSeparator()
-        bar.addAction("Test Integrity", self.test_integrity)
-        bar.addAction("Unlock…", self.unlock)
-        bar.addAction("Reload", lambda: self.reload(prompt=False))
+        add_action(bar, "dialog-ok", "Test Integrity", self.test_integrity)
+        add_action(bar, "document-decrypt", "Unlock…", self.unlock)
+        add_action(bar, "view-refresh", "Reload",
+                   lambda: self.reload(prompt=False))
+        mutate = icon_button(self, "document-edit", "Edit")
+        mutate.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        emenu = QMenu(self)
+        emenu.addAction("Add files…", self.add_files)
+        emenu.addAction("Delete", self.delete_selected)
+        emenu.addAction("Rename…", self.rename_selected)
+        emenu.addAction("Create archive…", self.create_archive)
+        mutate.setMenu(emenu)
+        bar.addWidget(mutate)
+
+        self.preview = QLabel("Select a file to preview", self)
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setMinimumWidth(220)
+        self.preview.setWordWrap(True)
+        split = QSplitter(self)
+        split.addWidget(self.tree)
+        split.addWidget(self.preview)
+        split.setStretchFactor(0, 3)
+        self.tree.currentItemChanged.connect(self._preview_item)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(bar)
         layout.addWidget(self.filter)
-        layout.addWidget(self.tree)
+        layout.addWidget(split, 1)
         layout.addWidget(self.status)
 
         # prompt=False: a constructor must never block on a modal dialog.
@@ -146,6 +170,8 @@ class ArchiveTab(QWidget):
                 name,
                 human_size(entry.size),
                 human_size(entry.packed),
+                f"{entry.ratio:.1f}×" if entry.ratio else "",
+                entry.crc,
                 entry.modified.strftime("%Y-%m-%d %H:%M") if entry.modified else "",
             ])
             item.setData(0, Qt.ItemDataRole.UserRole, entry.name)
@@ -236,7 +262,7 @@ class ArchiveTab(QWidget):
         self._jobs.append(job)
         job.signals.progress.connect(lambda _p, m: self.status.setText(m))
         job.signals.finished.connect(
-            lambda files: self.status.setText(f"Extracted {len(files)} file(s) to {dest}"))
+            lambda files: self._extracted(dest, files))
         job.signals.failed.connect(self._on_job_failed)
 
     def _on_job_failed(self, message: str, _trace: str) -> None:
@@ -262,6 +288,107 @@ class ArchiveTab(QWidget):
             "The archive is intact." if ok else "The archive is damaged.")
 
     # --- lifecycle -------------------------------------------------------
+    def _extracted(self, dest: str, files) -> None:
+        self.status.setText(f"Extracted {len(files)} file(s) to {dest}")
+        if QMessageBox.question(
+                self, "Open folder?",
+                f"Extracted to:\n{dest}\n\nOpen it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            from PyQt6.QtCore import QUrl
+            from PyQt6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl.fromLocalFile(dest))
+
+    def _preview_item(self, item, _prev=None) -> None:
+        if item is None:
+            return
+        name = item.data(0, Qt.ItemDataRole.UserRole)
+        if not name or self.info is None:
+            return
+        try:
+            target = ar.extract_one(self.path, name, self._sandbox.path,
+                                    self.password)
+        except Exception:
+            self.preview.setText(name)
+            return
+        from ..core.mime import Kind, detect_kind
+        kind = detect_kind(target)
+        if kind == Kind.IMAGE:
+            from PyQt6.QtGui import QPixmap
+            pix = QPixmap(str(target))
+            self.preview.setPixmap(pix.scaled(220, 280, Qt.AspectRatioMode.KeepAspectRatio,
+                                              Qt.TransformationMode.SmoothTransformation))
+        elif kind == Kind.TEXT:
+            self.preview.setText(target.read_text(errors="replace")[:2000])
+        else:
+            self.preview.setText(f"{name}\n{kind.value}")
+
+    def add_files(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(self, "Add to archive")
+        if not paths:
+            return
+        try:
+            ar.add_to(self.path, paths, self.password)
+        except ar.ArchiveError as exc:
+            QMessageBox.warning(self, "Add failed", str(exc))
+            return
+        self.reload(prompt=False)
+
+    def delete_selected(self) -> None:
+        members = self.selected_members()
+        if not members:
+            return
+        try:
+            ar.delete_members(self.path, members, self.password)
+        except ar.ArchiveError as exc:
+            QMessageBox.warning(self, "Delete failed", str(exc))
+            return
+        self.reload(prompt=False)
+
+    def rename_selected(self) -> None:
+        members = self.selected_members()
+        if len(members) != 1:
+            return
+        new, ok = QInputDialog.getText(self, "Rename", "New name:", text=members[0])
+        if not ok or not new:
+            return
+        try:
+            ar.rename_member(self.path, members[0], new, self.password)
+        except ar.ArchiveError as exc:
+            QMessageBox.warning(self, "Rename failed", str(exc))
+            return
+        self.reload(prompt=False)
+
+    def create_archive(self) -> None:
+        from .archive_create import CreateArchiveDialog
+        dialog = CreateArchiveDialog(self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        out, sources, fmt, level, pw = dialog.payload()
+        try:
+            ar.create(out, sources, fmt=fmt, password=pw, level=level)
+        except ar.ArchiveError as exc:
+            QMessageBox.warning(self, "Create failed", str(exc))
+            return
+        self.open_request.emit(str(out))
+
+    def comic_mode(self) -> None:
+        if self.info is None:
+            return
+        images = [e.name for e in self.info.entries
+                  if not e.is_dir and e.name.lower().endswith(
+                      (".png", ".jpg", ".jpeg", ".webp", ".gif"))]
+        if not images:
+            QMessageBox.information(self, "Comic mode", "No images in this archive.")
+            return
+        try:
+            target = ar.extract_one(self.path, images[0], self._sandbox.path,
+                                    self.password)
+        except Exception as exc:
+            QMessageBox.warning(self, "Comic mode", str(exc))
+            return
+        self.open_request.emit(str(target))
+
     def is_modified(self) -> bool:
         return False
 

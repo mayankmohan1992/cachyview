@@ -10,6 +10,37 @@ import sys
 from pathlib import Path
 
 
+def _ask_directory() -> str:
+    import shutil
+    from ..core.process import run
+    home = str(Path.home())
+    for cmd in (["kdialog", "--getexistingdirectory", home],
+                ["zenity", "--file-selection", "--directory"]):
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            res = run(cmd, timeout=120)
+        except Exception:
+            continue
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    return ""
+
+
+def cmd_test(args) -> int:
+    from ..backends import archive as ar
+    failed = 0
+    for path in args.files:
+        try:
+            ok = ar.test_archive(path, args.password)
+        except ar.ArchiveError as exc:
+            return _print_err(str(exc))
+        print(f"{path}: {'OK' if ok else 'DAMAGED'}")
+        failed += int(not ok)
+        _notify("Archive test", f"{Path(path).name}: {'OK' if ok else 'damaged'}")
+    return 1 if failed else 0
+
+
 def _print_err(message: str) -> int:
     print(f"cachyview: {message}", file=sys.stderr)
     return 1
@@ -34,6 +65,11 @@ def _notify(title: str, body: str) -> None:
 def cmd_extract(args) -> int:
     from ..backends import archive as ar
     dest = Path(args.dest) if args.dest else Path(args.files[0]).parent
+    if getattr(args, "ask_dest", False):
+        picked = _ask_directory()
+        if not picked:
+            return 1
+        dest = Path(picked)
     total = 0
     for path in args.files:
         src = Path(path)
@@ -70,6 +106,21 @@ def cmd_compress_archive(args) -> int:
     out = Path(args.output)
     try:
         ar.create(out, args.files, fmt=args.format, password=args.password)
+    except ar.ArchiveError as exc:
+        return _print_err(str(exc))
+    print(f"Created {out}")
+    _notify("Archive created", out.name)
+    return 0
+
+
+def cmd_pack(args) -> int:
+    from ..backends import archive as ar
+    files = [Path(f) for f in args.files]
+    if not files:
+        return _print_err("nothing to pack")
+    out = files[0].parent / ("archive.zip" if len(files) > 1 else f"{files[0].stem}.zip")
+    try:
+        ar.create(out, [str(f) for f in files], fmt="zip")
     except ar.ArchiveError as exc:
         return _print_err(str(exc))
     print(f"Created {out}")
@@ -223,12 +274,19 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("-p", "--password")
     ex.add_argument("--into-subdir", action="store_true",
                     help="extract each archive into its own folder")
+    ex.add_argument("--ask-dest", action="store_true",
+                    help="prompt for a destination folder (kdialog/zenity)")
     ex.set_defaults(func=cmd_extract)
 
     ls = sub.add_parser("list", help="list archive contents")
     ls.add_argument("files", nargs="+")
     ls.add_argument("-p", "--password")
     ls.set_defaults(func=cmd_list)
+
+    tst = sub.add_parser("test", help="test archive integrity")
+    tst.add_argument("files", nargs="+")
+    tst.add_argument("-p", "--password")
+    tst.set_defaults(func=cmd_test)
 
     ca = sub.add_parser("archive", help="create an archive")
     ca.add_argument("output")
@@ -237,6 +295,10 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.zst"])
     ca.add_argument("-p", "--password")
     ca.set_defaults(func=cmd_compress_archive)
+
+    pk = sub.add_parser("pack", help="zip selected files next to the first one")
+    pk.add_argument("files", nargs="+")
+    pk.set_defaults(func=cmd_pack)
 
     pdf = sub.add_parser("pdf", help="PDF tools")
     pdf.add_argument("action", choices=[

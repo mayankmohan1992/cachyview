@@ -1,0 +1,3 @@
+[console_scripts]
+cachyview = cachyview.__main__:main
+cachyview-cli = cachyview.integration.cli:main

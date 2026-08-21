@@ -93,6 +93,73 @@ def pretty_print(text: str, fmt: str) -> str:
     raise ValueError(f"Unsupported format: {fmt}")
 
 
+def minify(text: str, fmt: str) -> str:
+    if fmt == "json":
+        try:
+            return json.dumps(json.loads(text), separators=(",", ":"),
+                              ensure_ascii=False)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON: {exc.msg}") from exc
+    if fmt == "xml":
+        import re
+        return re.sub(r">\s+<", "><", pretty_print(text, "xml"))
+    raise ValueError(f"Unsupported format: {fmt}")
+
+
+def validate(text: str, fmt: str) -> str:
+    """Return '' if valid, otherwise a one-line error."""
+    try:
+        if fmt == "json":
+            json.loads(text)
+        elif fmt == "xml":
+            import xml.etree.ElementTree as ET
+            ET.fromstring(text)
+        elif fmt == "toml":
+            import tomllib
+            tomllib.loads(text)
+        elif fmt == "yaml":
+            try:
+                import yaml  # type: ignore
+            except ImportError as exc:
+                raise ValueError("PyYAML is not installed") from exc
+            yaml.safe_load(text)
+        else:
+            raise ValueError(f"Unsupported format: {fmt}")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    return ""
+
+
+def csv_rows(text: str, *, max_rows: int = 5000) -> tuple[list[str], list[list[str]]]:
+    import csv
+    import io
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t;|")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.reader(io.StringIO(text), dialect)
+    rows = []
+    header: list[str] = []
+    for i, row in enumerate(reader):
+        if i == 0:
+            header = row
+            continue
+        rows.append(row)
+        if len(rows) >= max_rows:
+            break
+    return header, rows
+
+
+def unified_diff(a: str, b: str, name_a: str = "a", name_b: str = "b") -> str:
+    import difflib
+    return "".join(difflib.unified_diff(
+        a.splitlines(keepends=True), b.splitlines(keepends=True),
+        fromfile=name_a, tofile=name_b))
+
+
 def hex_dump(data: bytes, width: int = 16, offset: int = 0) -> str:
     lines = []
     for i in range(0, len(data), width):

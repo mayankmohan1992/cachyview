@@ -8,12 +8,14 @@ import sys
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cachyview",
-        description="Archive, PDF, image and text toolkit for CachyOS.")
+        description="Archive, PDF, image and text toolkit for Linux.")
     parser.add_argument("files", nargs="*", help="files to open")
     parser.add_argument("--check-deps", action="store_true",
                         help="print the dependency report and exit")
     parser.add_argument("--no-session", action="store_true",
                         help="do not restore the previously open files")
+    parser.add_argument("--peek", action="store_true",
+                        help="Quick Look window (Esc closes, no session)")
     parser.add_argument("--install-integration", action="store_true",
                         help="add the launcher and Dolphin right-click actions")
     parser.add_argument("--uninstall-integration", action="store_true",
@@ -54,15 +56,31 @@ def main(argv: list[str] | None = None) -> int:
     from PyQt6.QtWidgets import QApplication
     from .ui.main_window import MainWindow
     from .ui import theming
+    from .core.single_instance import try_handoff, bind_handoff
+    from .core import settings as prefs
+
+    if try_handoff(args.files):
+        return 0
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName("CachyView")
     app.setApplicationDisplayName("CachyView")
     app.setDesktopFileName("cachyview")
     theming.apply_system_theme(app)
-    window = MainWindow(args.files)
+    window = MainWindow(args.files, peek=args.peek)
+    def _on_handoff(paths: list[str]) -> None:
+        for p in paths:
+            window.open_path(p)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    server = bind_handoff(_on_handoff)
+    _ = server
     window.show()
-    if not args.files and not args.no_session:
+    restore = (not args.files and not args.no_session and not args.peek
+               and prefs.load().get("restore_session", True))
+    if restore:
         window.restore_session()
     return app.exec()
 

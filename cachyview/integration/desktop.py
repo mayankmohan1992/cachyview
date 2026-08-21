@@ -52,6 +52,7 @@ def paths() -> dict[str, Path]:
         "menu_archive": menus / f"{APP_ID}-archive.desktop",
         "menu_pdf": menus / f"{APP_ID}-pdf.desktop",
         "menu_image": menus / f"{APP_ID}-image.desktop",
+        "icon": data / "icons" / "hicolor" / "scalable" / "apps" / f"{APP_ID}.svg",
     }
 
 
@@ -66,7 +67,7 @@ Name=CachyView
 GenericName=Document and Archive Viewer
 Comment=View and edit archives, PDFs, images and text
 Exec={exec_path} %F
-Icon=document-preview
+Icon=cachyview
 Terminal=false
 Categories=Graphics;Viewer;Qt;
 MimeType={';'.join(ALL_MIMES)};
@@ -81,13 +82,13 @@ def archive_menu(gui: str, cli: str) -> str:
 Type=Service
 ServiceTypes=KonqPopupMenu/Plugin
 MimeType={';'.join(ARCHIVE_MIMES)};
-Actions=cvOpen;cvExtractHere;cvExtractTo;cvExtractSub;cvTest;
+Actions=cvOpen;cvExtractHere;cvExtractTo;cvExtractSub;cvTest;cvCompress;
 X-KDE-Priority=TopLevel
 X-KDE-Submenu=CachyView
 
 [Desktop Action cvOpen]
 Name=Open in CachyView
-Icon=document-preview
+Icon=cachyview
 Exec={gui} %f
 
 [Desktop Action cvExtractHere]
@@ -103,12 +104,17 @@ Exec={cli} extract --into-subdir %F
 [Desktop Action cvExtractTo]
 Name=Extract To...
 Icon=archive-extract
-Exec={gui} %f
+Exec={cli} extract --ask-dest %F
 
 [Desktop Action cvTest]
 Name=Test Integrity
 Icon=checkmark
-Exec={cli} list %f
+Exec={cli} test %F
+
+[Desktop Action cvCompress]
+Name=Compress with CachyView
+Icon=archive-insert
+Exec={cli} pack %F
 """
 
 
@@ -123,7 +129,7 @@ X-KDE-Submenu=CachyView
 
 [Desktop Action cvOpen]
 Name=Open in CachyView
-Icon=document-preview
+Icon=cachyview
 Exec={gui} %f
 
 [Desktop Action cvMerge]
@@ -179,7 +185,7 @@ X-KDE-Submenu=CachyView
 
 [Desktop Action cvOpen]
 Name=Open in CachyView
-Icon=document-preview
+Icon=cachyview
 Exec={gui} %f
 
 [Desktop Action cvToPdf]
@@ -221,8 +227,12 @@ def install(gui_cmd: str = "cachyview", cli_cmd: str = "cachyview-cli",
     written: list[Path] = []
     for key, target in targets.items():
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(contents[key], encoding="utf-8")
-        target.chmod(0o755)          # KDE requires service menus to be executable
+        if key == "icon":
+            svg = Path(__file__).resolve().parents[1] / "data" / "cachyview.svg"
+            target.write_bytes(svg.read_bytes() if svg.is_file() else b"<svg xmlns='http://www.w3.org/2000/svg'/>")
+        else:
+            target.write_text(contents[key], encoding="utf-8")
+        target.chmod(0o755)
         written.append(target)
 
     if refresh:

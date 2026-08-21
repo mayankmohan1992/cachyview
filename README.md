@@ -9,18 +9,17 @@ fraction of a second, stays light on memory, and **never touches the network** �
 no telemetry, no update pings, no files uploaded. Everything runs locally on
 your machine.
 
-- 🖼 **Images** — view, zoom, pan, EXIF; non-destructive edits (rotate, flip,
-  crop, resize, colour, annotate-as-preview) and batch convert.
-- 📕 **PDF** — thumbnails + outline sidebar, text search, zoom; rich markup
-  (highlight, underline, strikethrough, rectangle, oval, line, arrow, freehand
-  sketch, notes) saved *inside* the file so they survive emailing; redaction;
-  signatures; instant in-place rotate/delete/insert; multi-page
-  delete/rotate/extract from a thumbnail selection; and a Tools menu for
-  merge, split, compress, protect, OCR, watermark and more.
-- 🗜 **Archives** — browse zip/7z/rar/tar/iso/… as a tree, extract, test
-  integrity, create; sandbox-hardened extraction.
-- 📝 **Text** — syntax-aware editor with line numbers, find, pretty-printing
-  and encoding/line-ending detection.
+- 🖼 **Images** — folder filmstrip, slideshow, EXIF inspector; non-destructive
+  Adjust Color sliders; crop, resize, canvas, straighten; classic filters
+  (blur, unsharp, sepia, vignette — no AI); markup; export with quality.
+- 📕 **PDF** — continuous scroll, thumbnails + outline, text search, copy,
+  print; markup saved *inside* the file on Save; redaction; signatures;
+  in-place rotate/delete/insert; Tools menu for merge, split, compress,
+  protect, OCR, watermark, form fill and more.
+- 🗜 **Archives** — tree with size/ratio/CRC, preview pane, extract, test,
+  create/add/delete/rename; sandbox-hardened extraction; comic mode for cbz.
+- 📝 **Text** — syntax highlighting, find/replace, encoding/line-ending,
+  markdown & CSV views, hex viewer for binaries.
 
 > Why "CachyView"? It started as a CachyOS-centric tool, but it runs on any
 > modern Linux desktop with Qt 6.

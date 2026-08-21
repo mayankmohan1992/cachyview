@@ -119,6 +119,16 @@ def test_close_tab_without_changes(win, tmp_path):
     assert win.tabs.count() == 0
 
 
+def test_hex_tab_for_binary(win, tmp_path):
+    f = tmp_path / "blob.bin"
+    f.write_bytes(bytes(range(64)))
+    win.open_path(f)
+    from cachyview.ui.hex_tab import HexTab
+    tab = win.tabs.widget(0)
+    assert isinstance(tab, HexTab)
+    assert "00" in tab.view.toPlainText()
+
+
 def test_line_number_gutter_has_width(win, tmp_path):
     f = tmp_path / "many.txt"
     f.write_text("\n".join(str(i) for i in range(500)))

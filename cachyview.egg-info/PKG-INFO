@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: cachyview
+Version: 0.2.0
+Summary: Fast native archive, PDF, image and text toolkit for Linux
+Requires-Python: >=3.11
+License-File: LICENSE
+Requires-Dist: PyQt6
+Requires-Dist: Pillow
+Provides-Extra: pdf
+Requires-Dist: PyMuPDF; extra == "pdf"
+Requires-Dist: pikepdf; extra == "pdf"
+Requires-Dist: img2pdf; extra == "pdf"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Dynamic: license-file

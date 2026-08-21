@@ -4,11 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QPixmap
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (QColorDialog, QComboBox, QHBoxLayout, QInputDialog,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QMenu, QMessageBox, QFileDialog, QPushButton,
-                             QScrollArea, QSlider, QSplitter, QToolBar, QToolButton,
+                             QMenu, QMessageBox, QFileDialog,
+                             QSlider, QSplitter, QTabWidget, QToolBar, QToolButton,
                              QVBoxLayout, QWidget)
 
 from ..backends import pdf as pb
@@ -38,11 +38,6 @@ def _ranges_label(pages: list[int]) -> str:
     return ",".join(out)
 
 
-def _shortcut(action, keys: str) -> None:
-    if action is not None:
-        action.setShortcut(keys)
-
-
 class PdfTab(QWidget):
     """Read a PDF and run the toolbox against it."""
 
@@ -59,17 +54,15 @@ class PdfTab(QWidget):
         self.zoom = 1.0
         self._jobs: list = []
         self._page_cache: dict[tuple[int, int], QPixmap] = {}
+        self._pending: list[pb.Annotation] = []
+        self._undo: list[pb.Annotation] = []
+        self._search_hits: list[tuple[int, tuple]] = []
+        self._layout_mode = "continuous"
 
-        # --- page view
+        # Hidden pixmap target for tests.
         self.page_label = QLabel(self)
         self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.view = QScrollArea(self)
-        self.view.setWidget(self.page_label)
-        self.view.setWidgetResizable(True)
-        self.view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Annotation overlay lives on top of the rendered page label.
-        self.annot_layer = AnnotationLayer(self)
+        self.page_label.hide()
 
         # --- sidebar
         self.thumbs = QListWidget(self)
@@ -91,68 +84,92 @@ class PdfTab(QWidget):
         self._thumbs: ThumbnailLoader | None = None
 
         self.outline = QListWidget(self)
+        self.outline.itemClicked.connect(self._on_outline)
         self.outline.itemActivated.connect(self._on_outline)
 
-        side = QSplitter(Qt.Orientation.Vertical, self)
-        self._side = side
-        side.addWidget(self.thumbs)
-        side.addWidget(self.outline)
+        self.side_tabs = QTabWidget(self)
+        self.side_tabs.setDocumentMode(True)
+        self.side_tabs.addTab(self.thumbs, "Pages")
+        self.side_tabs.addTab(self.outline, "Contents")
+        self._side = self.side_tabs
 
         split = QSplitter(Qt.Orientation.Horizontal, self)
-        split.addWidget(side)
-        split.addWidget(self.view)
+        split.addWidget(self.side_tabs)
+        from .pdf_pages import ContinuousPdfView
+        self.strip = ContinuousPdfView(self)
+        self.strip.need_render.connect(self._on_need_render)
+        self.strip.page_changed.connect(self._on_strip_page)
+        self.strip.zoom_requested.connect(self._on_view_zoom)
+        split.addWidget(self.strip)
         split.setStretchFactor(1, 1)
+        self.view = self.strip
+        self.annot_layer = AnnotationLayer(self)
+        gone = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        gone.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        gone.activated.connect(self.delete_selected_annotation)
 
-        # --- toolbars
-        nav = QToolBar(self)
-        self.sidebar_btn = nav.addAction("▤", self._toggle_sidebar)
-        self.sidebar_btn.setToolTip("Show / hide thumbnails & outline (S)")
-        self.sidebar_btn.setCheckable(True)
-        self.sidebar_btn.setChecked(True)
-        _shortcut(nav.addAction("◀", self.prev_page), "PgUp")
+        # --- toolbar (one Preview-style icon bar)
+        from .icons import add_action, icon_button, style_bar
+
+        bar = QToolBar(self)
+        style_bar(bar)
+        self.sidebar_btn = add_action(
+            bar, ("view-sidetree", "view-list-details", "sidebar-show"),
+            "Sidebar", self._toggle_sidebar,
+            shortcut="S", checkable=True,
+            tooltip="Show / hide thumbnails and outline")
+        if self.sidebar_btn is not None:
+            self.sidebar_btn.setChecked(True)
+        add_action(bar, "go-previous", "Previous page", self.prev_page,
+                   shortcut="PgUp")
         self.page_box = QLineEdit(self)
-        self.page_box.setFixedWidth(60)
+        self.page_box.setFixedWidth(52)
         self.page_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.page_box.returnPressed.connect(self._on_page_box)
-        nav.addWidget(self.page_box)
+        self.page_box.setToolTip("Page number")
+        bar.addWidget(self.page_box)
         self.page_total = QLabel(" / ?", self)
-        nav.addWidget(self.page_total)
-        _shortcut(nav.addAction("▶", self.next_page), "PgDown")
-        nav.addSeparator()
-        nav.addAction("−", self.zoom_out)
+        bar.addWidget(self.page_total)
+        add_action(bar, "go-next", "Next page", self.next_page, shortcut="PgDown")
+        bar.addSeparator()
+        add_action(bar, "zoom-out", "Zoom out", self.zoom_out)
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.zoom_slider.setRange(25, 400)
         self.zoom_slider.setValue(100)
-        self.zoom_slider.setFixedWidth(110)
+        self.zoom_slider.setFixedWidth(100)
         self.zoom_slider.setToolTip("Zoom")
         self.zoom_slider.valueChanged.connect(self._on_zoom_slider)
-        nav.addWidget(self.zoom_slider)
-        nav.addAction("+", self.zoom_in)
-        nav.addAction("Fit", self.fit_width)
+        bar.addWidget(self.zoom_slider)
+        add_action(bar, "zoom-in", "Zoom in", self.zoom_in)
+        add_action(bar, ("zoom-fit-width", "zoom-fit-best"), "Fit width",
+                   self.fit_width)
+        self.layout_box = QComboBox(self)
+        self.layout_box.addItem("Continuous", "continuous")
+        self.layout_box.addItem("Single", "single")
+        self.layout_box.addItem("Facing", "facing")
+        self.layout_box.setToolTip("Page layout")
+        self.layout_box.currentIndexChanged.connect(self._on_layout_mode)
+        bar.addWidget(self.layout_box)
 
         self.search_box = QLineEdit(self)
-        self.search_box.setPlaceholderText("Search text…")
+        self.search_box.setPlaceholderText("Search…")
         self.search_box.setClearButtonEnabled(True)
+        self.search_box.setMaximumWidth(220)
         self.search_box.returnPressed.connect(self.search_next)
-        nav.addSeparator()
-        nav.addWidget(self.search_box)
+        bar.addSeparator()
+        bar.addWidget(self.search_box)
 
-        tools = QToolBar(self)
-        # Preview-style inline controls: instant, in-place, no new tab.
-        rot_l = tools.addAction("⟲", lambda: self.rotate_current(-90))
-        rot_l.setToolTip("Rotate left (counter-clockwise)")
-        rot_r = tools.addAction("⟳", lambda: self.rotate_current(90))
-        rot_r.setToolTip("Rotate right (clockwise)")
-        tools.addSeparator()
-        del_btn = tools.addAction("🗑", lambda: self.delete_current())
-        del_btn.setToolTip("Delete current page")
-        ins_btn = tools.addAction("⎄", lambda: self.insert_after())
-        ins_btn.setToolTip("Insert a page after this one")
-        tools.addSeparator()
+        bar.addSeparator()
+        add_action(bar, "object-rotate-left", "Rotate left",
+                   lambda: self.rotate_current(-90),
+                   tooltip="Rotate current page left")
+        add_action(bar, "object-rotate-right", "Rotate right",
+                   lambda: self.rotate_current(90),
+                   tooltip="Rotate current page right")
+        bar.addSeparator()
 
-        # Annotation controls, collapsed into a single popup button.
-        self.annot_btn = QToolButton(self)
-        self.annot_btn.setText("Annotate")
+        self.annot_btn = icon_button(
+            self, ("draw-highlight", "document-edit", "edit-entry"), "Annotate")
         self.annot_btn.setCheckable(True)
         self.annot_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.annot_menu = QMenu(self)
@@ -186,56 +203,59 @@ class PdfTab(QWidget):
         self.annot_action.triggered.connect(self._on_annotate_mode)
         self.annot_color = QColor(255, 217, 51)
         self.annot_color_btn = QToolButton(self)
-        self.annot_color_btn.setText("▮")
         self.annot_color_btn.setToolTip("Annotation colour")
+        self.annot_color_btn.setFixedSize(28, 28)
         self.annot_color_btn.clicked.connect(self._pick_annot_color)
-        self.show_marks_btn = QToolButton(self)
-        self.show_marks_btn.setText("Marks")
+        self._style_color_btn()
+        self.show_marks_btn = icon_button(
+            self, ("view-visible", "layer-visible-on"), "Show annotations")
         self.show_marks_btn.setCheckable(True)
         self.show_marks_btn.setChecked(True)
         self.show_marks_btn.toggled.connect(self._on_toggle_marks)
-        self.show_marks_btn.setToolTip("Show / hide annotations")
-        tools.addWidget(self.annot_btn)
-        tools.addWidget(self.annot_color_btn)
-        tools.addWidget(self.show_marks_btn)
-        tools.addSeparator()
-        self.present_btn = QToolButton(self)
-        self.present_btn.setText("▶ Present")
-        self.present_btn.setToolTip(
-            "Auto-advance pages on a timer (presentation / hands-free reading)")
+        cluster = QWidget(self)
+        cluster_row = QHBoxLayout(cluster)
+        cluster_row.setContentsMargins(6, 0, 6, 0)
+        cluster_row.setSpacing(8)
+        cluster_row.addWidget(self.annot_btn)
+        cluster_row.addWidget(self.annot_color_btn)
+        cluster_row.addWidget(self.show_marks_btn)
+        bar.addWidget(cluster)
+        bar.addSeparator()
+        self.present_btn = icon_button(
+            self, ("media-playback-start", "media-playback-pause"), "Present")
         self.present_btn.setCheckable(True)
+        self.present_btn.setToolTip("Auto-advance pages (presentation)")
         self.present_btn.toggled.connect(self._toggle_present)
-        tools.addWidget(self.present_btn)
+        self.present_btn.hide()
         self._present_timer = None
 
-        # Heavy / less-common operations live in an overflow menu so the
-        # primary bar stays uncluttered.
-        overflow = QToolButton(self)
-        overflow.setText("Tools")
+        overflow = icon_button(self, "application-menu", "Tools")
         overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         over_menu = QMenu(self)
+        over_menu.addAction("Delete page", self.delete_current)
+        over_menu.addAction("Insert page…", self.insert_after)
+        over_menu.addSeparator()
         for name in ("Organise pages…", "Extract pages", "Split",
                      "Merge with…", "Compress", "Flatten", "Protect",
-                     "Unlock", "Watermark", "Page numbers", "To images",
-                     "To text", "OCR", "Repair", "Sign / Stamp",
-                     "Bookmarks…", "Metadata"):
+                     "Unlock", "Watermark", "Page numbers",
+                     "Crop & Resize", "Invert colours", "Headers & Footers",
+                     "To images", "To text", "OCR", "Repair", "Sign / Stamp",
+                     "Bookmarks…", "Metadata", "Fill form…", "Fingerprint"):
             over_menu.addAction(name, lambda n=name: run_tool(self, n))
         over_menu.addSeparator()
+        over_menu.addAction("Present", lambda: self.present_btn.toggle())
         over_menu.addAction("Sign…", self.sign)
+        over_menu.addAction("Print…", self.print_file)
+        over_menu.addAction("Copy page text", self.copy_page_text)
         overflow.setMenu(over_menu)
-        tools.addWidget(overflow)
+        bar.addWidget(overflow)
 
         self.status = QLabel(self)
-
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.addWidget(nav, 1)
-        top.addWidget(tools)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addLayout(top)
+        layout.addWidget(bar)
         layout.addWidget(split, 1)
         layout.addWidget(self.status)
 
@@ -269,12 +289,12 @@ class PdfTab(QWidget):
         self.page_total.setText(f" / {self.info.page_count}")
         self._fill_outline()
         self._fill_thumbs()
+        self.strip.load(self.info, self.zoom)
         self.go_to(min(self.page, self.info.page_count))
 
     def reload_from(self, path: Path) -> None:
         """Re-read the document after an in-place edit replaced the file."""
         self.path = Path(path)
-        self.page = 1
         self.reload(prompt=False)
 
     def _ask_password(self) -> bool:
@@ -294,7 +314,10 @@ class PdfTab(QWidget):
             item = QListWidgetItem("   " * max(0, level - 1) + title)
             item.setData(Qt.ItemDataRole.UserRole, page)
             self.outline.addItem(item)
-        self.outline.setVisible(bool(self.info.toc))
+        if not self.info.toc:
+            empty = QListWidgetItem("No contents in this file")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.outline.addItem(empty)
 
     def _fill_thumbs(self) -> None:
         """Create placeholder rows and start rendering the visible ones."""
@@ -341,7 +364,11 @@ class PdfTab(QWidget):
 
     def _on_outline(self, item: QListWidgetItem) -> None:
         page = item.data(Qt.ItemDataRole.UserRole)
-        if isinstance(page, int):
+        try:
+            page = int(page)
+        except (TypeError, ValueError):
+            return
+        if page >= 1:
             self.go_to(page)
 
     # --- navigation ------------------------------------------------------
@@ -356,6 +383,7 @@ class PdfTab(QWidget):
             self.thumbs.blockSignals(False)
         self._render()
         self._request_visible_thumbs()
+        self.strip.scroll_to(self.page)
 
     def next_page(self) -> None:
         self.go_to(self.page + 1)
@@ -394,10 +422,12 @@ class PdfTab(QWidget):
 
     def zoom_in(self) -> None:
         self.zoom = next((z for z in ZOOMS if z > self.zoom + 1e-6), ZOOMS[-1])
+        self.strip.set_zoom(self.zoom)
         self._render()
 
     def zoom_out(self) -> None:
         self.zoom = next((z for z in reversed(ZOOMS) if z < self.zoom - 1e-6), ZOOMS[0])
+        self.strip.set_zoom(self.zoom)
         self._render()
 
     def fit_width(self) -> None:
@@ -408,11 +438,13 @@ class PdfTab(QWidget):
         page_width = self.info.pages[self.page - 1].width
         if page_width > 0:
             self.zoom = max(0.1, min(4.0, avail / page_width))
+        self.strip.set_zoom(self.zoom)
         self._render()
 
     def _on_zoom_slider(self, value: int) -> None:
         """Zoom to an arbitrary percentage via the slider."""
         self.zoom = max(0.1, min(4.0, value / 100))
+        self.strip.set_zoom(self.zoom)
         self._render()
 
     def _sync_zoom_slider(self) -> None:
@@ -450,49 +482,99 @@ class PdfTab(QWidget):
                        lambda: self.extract_pages(pages))
         menu.exec(self.thumbs.viewport().mapToGlobal(pos))
 
+    def _on_layout_mode(self, _index: int = 0) -> None:
+        mode = self.layout_box.currentData()
+        if isinstance(mode, str):
+            self.strip.set_layout_mode(mode)
+            self.annot_layer.sync_geometry()
+
+    def _on_view_zoom(self, zoom: float) -> None:
+        self.zoom = zoom
+        self._sync_zoom_slider()
+        self.annot_layer.sync_geometry()
+        self.status.setText(
+            f"Page {self.page} of {self.info.page_count if self.info else '?'} · {int(self.zoom * 100)}%")
+
     def _render(self) -> None:
         if not self.info:
             return
-        dpi = int(72 * self.zoom)
+        dpi = self.strip.current_dpi()
         key = (self.page, dpi)
         cached = self._page_cache.get(key)
         if cached is None:
-            try:
-                data = pb.render_page(self.path, self.page, dpi=dpi,
-                                      password=self.password)
-            except pb.PdfError as exc:
-                self.status.setText(str(exc))
+            cached = self._raster(self.page, dpi)
+            if cached is None:
                 return
-            cached = QPixmap()
-            cached.loadFromData(data, "PNG")
-            if len(self._page_cache) > 24:      # bound the cache
+            if len(self._page_cache) > 24:
                 self._page_cache.clear()
             self._page_cache[key] = cached
         self.page_label.setPixmap(cached)
+        self.strip.show_pixmap(self.page, cached, dpi)
         self.status.setText(
             f"Page {self.page} of {self.info.page_count} · {int(self.zoom * 100)}%")
-        # keep the annotation overlay aligned with the page
         self.annot_layer.sync_geometry()
         self.annot_layer.refresh()
         self._sync_zoom_slider()
+
+    def _raster(self, page: int, dpi: int) -> QPixmap | None:
+        try:
+            data = pb.render_page(self.path, page, dpi=dpi,
+                                  password=self.password)
+        except pb.PdfError as exc:
+            self.status.setText(str(exc))
+            return None
+        cached = QPixmap()
+        cached.loadFromData(data, "PNG")
+        return cached if not cached.isNull() else None
+
+    def _on_need_render(self, page: int, dpi: int) -> None:
+        if not self.info:
+            return
+        key = (page, dpi)
+        cached = self._page_cache.get(key)
+        if cached is None:
+            cached = self._raster(page, dpi)
+            if cached is None:
+                return
+            if len(self._page_cache) > 24:
+                self._page_cache.clear()
+            self._page_cache[key] = cached
+        self.strip.show_pixmap(page, cached, dpi)
+        if page == self.page:
+            self.page_label.setPixmap(cached)
+        self.annot_layer.sync_geometry()
+
+    def _on_strip_page(self, page: int) -> None:
+        if page == self.page or not self.info:
+            return
+        self.page = page
+        self.page_box.setText(str(self.page))
+        if self.thumbs.currentRow() != self.page - 1:
+            self.thumbs.blockSignals(True)
+            self.thumbs.setCurrentRow(self.page - 1)
+            self.thumbs.blockSignals(False)
+        self.status.setText(
+            f"Page {self.page} of {self.info.page_count} · {int(self.zoom * 100)}%")
 
     # --- search ----------------------------------------------------------
     def search_next(self) -> None:
         needle = self.search_box.text().strip()
         if not needle or not self.info:
             return
-        total = self.info.page_count
-        for offset in range(1, total + 1):
-            n = (self.page - 1 + offset) % total + 1
-            try:
-                text = pb.extract_text(self.path, [n], self.password)
-            except pb.PdfError:
-                break
-            if needle.lower() in text.lower():
-                self.go_to(n)
-                self.status.setText(f"Found '{needle}' on page {n}")
-                return
-        self.status.setText(f"'{needle}' not found")
+        try:
+            hits = pb.search_text(self.path, needle, password=self.password)
+        except pb.PdfError:
+            hits = []
+        self._search_hits = hits
+        self.strip.set_search_hits(hits)
+        if not hits:
+            self.status.setText(f"'{needle}' not found")
+            return
+        after = [h for h in hits if h[0] > self.page] or hits
+        page, _rect = after[0]
+        self.go_to(page)
+        n = sum(1 for h in hits if h[0] == page)
+        self.status.setText(f"Found '{needle}' on page {page} ({len(hits)} hit(s), {n} on this page)")
 
     # --- annotations -----------------------------------------------------
     def _on_annotate_mode(self, action) -> None:
@@ -517,43 +599,113 @@ class PdfTab(QWidget):
         verb = verbs.get(mode, "drag on the page to annotate")
         self.status.setText(f"Annotation mode: {verb}. Esc or toggle off to stop.")
 
+    def _style_color_btn(self) -> None:
+        c = self.annot_color.name()
+        self.annot_color_btn.setStyleSheet(
+            f"QToolButton {{"
+            f" background: {c};"
+            f" border: 1px solid palette(mid);"
+            f" border-radius: 6px;"
+            f" min-width: 28px; min-height: 28px;"
+            f" max-width: 28px; max-height: 28px;"
+            f"}}")
+
     def _pick_annot_color(self) -> None:
         col = QColorDialog.getColor(self.annot_color, self,
                                     "Annotation colour")
-        if col.isValid():
-            self.annot_color = col
-            self.annot_color_btn.setStyleSheet(
-                f"color: {col.name()}; font-size: 14px;")
-            if self.annot_layer.mode != "off":
-                self.annot_layer.color = (col.red() / 255, col.green() / 255,
-                                          col.blue() / 255)
-                self.annot_layer.update()
+        if not col.isValid():
+            return
+        self.annot_color = col
+        self._style_color_btn()
+        rgb = (col.red() / 255, col.green() / 255, col.blue() / 255)
+        self.annot_layer.color = rgb
+        selected = self.annot_layer.selected()
+        if selected is not None:
+            self._recolor_annotation(selected, rgb)
+        self.annot_layer.update()
+
+    def _recolor_annotation(self, ann: pb.Annotation, rgb) -> None:
+        if not getattr(ann, "saved", False):
+            ann.color = rgb
+            self.annot_layer.refresh()
+            self.modified_changed.emit(True)
+            self.status.setText("Colour updated — Save to write it into the file.")
+            return
+
+        def write(tmp: Path) -> None:
+            pb.recolor_annotation(self.path, tmp, ann.page, ann.rect, rgb,
+                                  self.password)
+
+        try:
+            replace_in_place(self.path, write)
+        except (pb.PdfError, OSError) as exc:
+            QMessageBox.critical(self, "Colour change failed", str(exc))
+            return
+        self.annot_layer.refresh()
+        self.status.setText("Annotation colour saved.")
 
     def _on_toggle_marks(self, checked: bool) -> None:
         self.annot_layer.set_show_marks(checked)
 
     def apply_annotation(self, kind: str, rect, color, text: str,
-                         points: list[tuple[float, float]] | None = None) -> None:
-        """Write one annotation into the PDF (safe-swapped) on a worker."""
-        from ..core.safe import replace_in_place
+                         points: list[tuple[float, float]] | None = None,
+                         page: int | None = None) -> None:
+        """Queue one annotation; Ctrl+S writes it into the file."""
         from ..backends.pdf import Annotation
 
-        ann = Annotation(page=self.page, kind=kind, rect=rect,
-                         color=color, text=text, points=points or [])
+        target = page or self.page
+        ann = Annotation(page=target, kind=kind, rect=rect,
+                         color=color, text=text, points=points or [],
+                         saved=False)
+        self._pending.append(ann)
+        self._undo.append(ann)
+        self.annot_layer.refresh()
+        self.modified_changed.emit(True)
+        self.status.setText(
+            f"Queued {kind} on page {target} — Save to write it into the file.")
+
+    def undo(self) -> bool:
+        """Remove the last unsaved annotation (Ctrl+Z)."""
+        if not self._undo:
+            self.status.setText("Nothing to undo.")
+            return True
+        ann = self._undo.pop()
+        if ann in self._pending:
+            self._pending.remove(ann)
+        if self.annot_layer.selected() is ann:
+            self.annot_layer._selected = None
+        self.annot_layer.refresh()
+        self.modified_changed.emit(bool(self._pending))
+        self.status.setText("Undid last annotation.")
+        return True
+
+    def delete_selected_annotation(self) -> None:
+        ann = self.annot_layer.selected()
+        if ann is None:
+            return
+        if not getattr(ann, "saved", False):
+            if ann in self._pending:
+                self._pending.remove(ann)
+            if ann in self._undo:
+                self._undo.remove(ann)
+            self.annot_layer._selected = None
+            self.annot_layer.refresh()
+            self.modified_changed.emit(bool(self._pending))
+            self.status.setText("Removed unsaved annotation.")
+            return
 
         def write(tmp: Path) -> None:
-            pb.add_annotations(self.path, tmp, [ann], self.password)
+            pb.remove_annotation(self.path, tmp, ann.page, ann.rect,
+                                 self.password)
 
-        self.status.setText(f"Adding {kind}…")
         try:
             replace_in_place(self.path, write)
         except (pb.PdfError, OSError) as exc:
-            QMessageBox.critical(self, "Annotation failed", str(exc))
+            QMessageBox.critical(self, "Delete failed", str(exc))
             return
-        # Reload the document so info reflects the new annotation.
-        self._page_cache.clear()
+        self.annot_layer._selected = None
         self.annot_layer.refresh()
-        self.status.setText(f"Added {kind} on page {self.page}.")
+        self.status.setText("Deleted annotation from the file.")
 
     def apply_redaction(self, rect) -> None:
         """Permanently remove content under *rect* on the current page.
@@ -596,18 +748,8 @@ class PdfTab(QWidget):
         self._placing_signature = dialog.result_path
         self.status.setText("Click anywhere on the page to place the signature "
                             "(Esc to cancel).")
-        self.view.installEventFilter(self)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if getattr(self, "_placing_signature", None) is not None and \
-                obj is self.view and event.type() == event.Type.MouseButtonPress:
-            pos = self.page_label.mapFrom(self.view, event.position().toPoint())
-            if 0 <= pos.x() <= self.page_label.width() \
-                    and 0 <= pos.y() <= self.page_label.height():
-                self._place_signature_at(pos)
-                self.view.removeEventFilter(self)
-                self._placing_signature = None
-                return True
         return super().eventFilter(obj, event)
 
     def _place_signature_at(self, pos) -> None:
@@ -640,7 +782,6 @@ class PdfTab(QWidget):
         self.status.setText("Signature placed.")
 
     def keyPressEvent(self, a0) -> None:  # noqa: N802
-
         if a0 is not None and a0.key() == Qt.Key.Key_Escape \
                 and self.annot_layer.mode != "off":
             self.annot_layer.set_mode("off")
@@ -648,6 +789,11 @@ class PdfTab(QWidget):
             self.status.setText("Annotation mode off.")
             a0.accept()
             return
+        if a0 is not None and a0.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if self.annot_layer.selected() is not None:
+                self.delete_selected_annotation()
+                a0.accept()
+                return
         super().keyPressEvent(a0)
 
     # --- tools -----------------------------------------------------------
@@ -682,10 +828,23 @@ class PdfTab(QWidget):
                                 "A PDF must keep at least one page.")
             return
         spec = _ranges_label(pages)
+        self._drop_pending_on_pages(pages)
         return _run_in_place(
             self, f"Deleting {spec}",
             lambda tmp, ctx: pb.delete_pages(
                 self.path, tmp, spec, password=self.password))
+
+    def _drop_pending_on_pages(self, pages: list[int]) -> None:
+        gone = set(pages)
+        kept: list[pb.Annotation] = []
+        for ann in self._pending:
+            if ann.page in gone:
+                continue
+            ann.page -= sum(1 for p in gone if p < ann.page)
+            kept.append(ann)
+        self._pending = kept
+        self._undo = [a for a in self._undo if a in kept]
+        self.modified_changed.emit(bool(self._pending))
 
     def extract_pages(self, pages: list[int]) -> None:
         """Pull the selected pages into a new file (keeps the original)."""
@@ -714,6 +873,9 @@ class PdfTab(QWidget):
         if not path:
             return
         after = self.page
+        for ann in self._pending:
+            if ann.page > after:
+                ann.page += 1
         _run_in_place(
             self, "Inserting page",
             lambda tmp, ctx: pb.insert_pages(
@@ -721,10 +883,69 @@ class PdfTab(QWidget):
 
     # --- lifecycle -------------------------------------------------------
     def is_modified(self) -> bool:
-        return False
+        return bool(self._pending)
 
     def save(self) -> bool:
+        if not self._pending:
+            return True
+        pending = list(self._pending)
+
+        def write(tmp: Path) -> None:
+            pb.add_annotations(self.path, tmp, pending, self.password)
+
+        try:
+            replace_in_place(self.path, write)
+        except (pb.PdfError, OSError) as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return False
+        self._pending.clear()
+        self._undo.clear()
+        self._page_cache.clear()
+        self.annot_layer.refresh()
+        self.modified_changed.emit(False)
+        self.status.setText("Saved annotations into the file.")
         return True
+
+    def copy_page_text(self) -> None:
+        from PyQt6.QtWidgets import QApplication
+        try:
+            text = pb.extract_text(self.path, [self.page], self.password)
+        except pb.PdfError as exc:
+            QMessageBox.warning(self, "Copy", str(exc))
+            return
+        QApplication.clipboard().setText(text)
+        self.status.setText("Copied this page's text.")
+
+    def print_file(self) -> None:
+        """Send the PDF file to CUPS instead of rasterising every page."""
+        import shutil
+        import subprocess
+        from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
+        printer = QPrinter()
+        dialog = QPrintDialog(printer, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        lp = shutil.which("lp")
+        if lp is None:
+            QMessageBox.warning(self, "Print", "The lp command is not available.")
+            return
+        cmd = [lp]
+        name = printer.printerName()
+        if name:
+            cmd.extend(["-d", name])
+        copies = printer.copyCount()
+        if copies > 1:
+            cmd.extend(["-n", str(copies)])
+        frm, to = printer.fromPage(), printer.toPage()
+        if frm and to:
+            cmd.extend(["-P", f"{frm}-{to}"])
+        cmd.append(str(self.path))
+        try:
+            subprocess.run(cmd, check=False, capture_output=True, timeout=30)
+        except OSError as exc:
+            QMessageBox.warning(self, "Print", str(exc))
+            return
+        self.status.setText(f"Sent {self.path.name} to the printer.")
 
     def cleanup(self) -> None:
         """Stop background rendering when the tab goes away."""

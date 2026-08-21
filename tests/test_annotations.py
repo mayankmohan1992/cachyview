@@ -39,23 +39,23 @@ def test_layer_maps_widget_to_pdf_points(doc, app):
     tab = PdfTab(doc)
     tab.zoom = 1.0
     layer = tab.annot_layer
-    # page is 400x500; bottom-left of widget -> PDF (x, 0)
-    x0, y0 = layer._widget_to_pdf(40, 500)   # bottom edge
-    x1, y1 = layer._widget_to_pdf(300, 400)  # up by 100
+    g = tab.strip._geoms[0]
+    x0, y0 = layer._widget_to_pdf(g.x + 40, g.y + 500)
+    x1, y1 = layer._widget_to_pdf(g.x + 300, g.y + 400)
     assert abs(x0 - 40) < 1e-6
     assert abs(y0 - 0) < 1e-6
     assert abs(x1 - 300) < 1e-6
-    assert abs(y1 - 100) < 1e-6      # PDF y grows upward
+    assert abs(y1 - 100) < 1e-6
     tab.close()
 
 
 def test_pdf_to_widget_round_trips(doc, app):
     tab = PdfTab(doc)
     tab.zoom = 2.0
+    tab.strip.set_zoom(2.0)
     layer = tab.annot_layer
     rect = (40, 50, 300, 90)
-    r = layer._pdf_to_widget_rect(rect)
-    # widget rect should be 2x the PDF size
+    r = layer._pdf_to_widget_rect(1, rect)
     assert abs(r.width() - (300 - 40) * 2) < 1e-6
     assert abs(r.height() - (90 - 50) * 2) < 1e-6
     tab.close()
@@ -72,14 +72,56 @@ def test_apply_annotation_writes_into_file(doc, app, tmp_path):
     layer = tab.annot_layer
     layer.set_mode("highlight")
     layer.sync_geometry()
-    # a real drag across the page
-    layer.mousePressEvent(_mouse(layer, QMouseEvent.Type.MouseButtonPress, 40, 460))
-    layer.mouseMoveEvent(_mouse(layer, QMouseEvent.Type.MouseMove, 200, 360))
-    layer.mouseReleaseEvent(_mouse(layer, QMouseEvent.Type.MouseButtonRelease, 200, 360))
+    g = tab.strip._geoms[0]
+    layer.mousePressEvent(_mouse(layer, QMouseEvent.Type.MouseButtonPress, g.x + 40, g.y + 460))
+    layer.mouseMoveEvent(_mouse(layer, QMouseEvent.Type.MouseMove, g.x + 200, g.y + 360))
+    layer.mouseReleaseEvent(_mouse(layer, QMouseEvent.Type.MouseButtonRelease, g.x + 200, g.y + 360))
     app.processEvents()
+    tab.save()
     after = pb.list_annotations(target)
     assert len(after) == before + 1
     assert after[-1].kind == "highlight"
+    tab.close()
+
+
+def test_pending_annotation_dropped_when_page_deleted(tmp_path, app):
+    d = fitz.open()
+    d.new_page()
+    d.new_page()
+    src = tmp_path / "two.pdf"
+    d.save(src)
+    d.close()
+    tab = PdfTab(src)
+    tab.apply_annotation("highlight", (10, 10, 40, 40), (1, 1, 0), "", page=1)
+    tab.apply_annotation("rectangle", (10, 10, 40, 40), (1, 0, 0), "", page=2)
+    assert [a.page for a in tab._pending] == [1, 2]
+    tab._drop_pending_on_pages([1])
+    assert [a.page for a in tab._pending] == [1]
+    assert tab._pending[0].kind == "rectangle"
+    tab.close()
+
+
+def test_undo_removes_last_pending_annotation(doc, app):
+    tab = PdfTab(doc)
+    tab.apply_annotation("highlight", (10, 10, 40, 40), (1, 1, 0), "")
+    assert tab._pending
+    tab.undo()
+    assert not tab._pending
+    tab.close()
+
+
+def test_select_and_recolor_pending(doc, app):
+    tab = PdfTab(doc)
+    tab.apply_annotation("rectangle", (40, 50, 120, 90), (1.0, 0.85, 0.2), "")
+    tab.annot_layer.refresh()
+    g = tab.strip._geoms[0]
+    # centre of the rect in widget space at zoom 1: x=80, y = 500-90=410 ... 
+    # wait page 500 tall, y_widget = g.y + (500-90)*1 = g.y+410
+    hit = tab.annot_layer.try_select(g.x + 80, g.y + 410)
+    assert hit
+    assert tab.annot_layer.selected() is not None
+    tab._recolor_annotation(tab.annot_layer.selected(), (0.0, 0.0, 1.0))
+    assert tab._pending[0].color[2] == 1.0
     tab.close()
 
 

@@ -231,6 +231,60 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
                  lambda ctx: pb.add_page_numbers(src, out, password=pw),
                  lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
 
+    elif name == "Crop & Resize":
+        from .pdf_margins import CropResizeDialog
+        dialog = CropResizeDialog(tab)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        margins, size = dialog.chosen
+        out = output_path(src, "cropped")
+        _run_job(tab, "Cropping / resizing",
+                 lambda ctx: pb.crop_resize_pages(
+                     src, out, margins=margins, page_size=size, password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Invert colours":
+        reply = QMessageBox.question(
+            tab, "Invert colours",
+            "Inverting renders each page to an image (dark-mode reading). "
+            "The result is pixel-based, not vector. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        out = output_path(src, "inverted")
+        _run_job(tab, "Inverting colours",
+                 lambda ctx: pb.invert_colours(src, out, password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Headers & Footers":
+        from .pdf_margins import HeaderFooterDialog
+        dialog = HeaderFooterDialog(tab)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        header, footer, numbers, size = dialog.chosen
+        out = output_path(src, "annotated")
+        _run_job(tab, "Adding headers / footers",
+                 lambda ctx: pb.add_headers_footers(
+                     src, out, header=header, footer=footer,
+                     page_numbers=numbers, size=size, password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Fingerprint":
+        try:
+            sums = pb.fingerprint(src)
+        except OSError as exc:
+            QMessageBox.warning(tab, "Fingerprint", str(exc))
+            return
+        QMessageBox.information(
+            tab, "File fingerprint",
+            f"{src.name}\n\nSHA-256: {sums['sha256']}\n"
+            f"SHA-1:   {sums['sha1']}\nMD5:     {sums['md5']}")
+
+    elif name == "Images to PDF…":
+        from .image_to_pdf import ImageToPdfDialog
+        ImageToPdfDialog(tab).exec()
+
     elif name == "To images":
         dpi, ok = QInputDialog.getInt(tab, "To images", "Resolution (DPI):",
                                       150, 36, 600)
@@ -298,6 +352,29 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
         _run_job(tab, "Stamping",
                  lambda ctx: pb.stamp(src, out, image=img or None,
                                      text=text or None, password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Fill form…":
+        try:
+            fields = pb.list_form_fields(src, pw)
+        except pb.PdfError as exc:
+            QMessageBox.warning(tab, "Form", str(exc))
+            return
+        if not fields:
+            QMessageBox.information(tab, "Form", "This PDF has no fillable fields.")
+            return
+        values = {}
+        for field in fields:
+            text, ok = QInputDialog.getText(
+                tab, "Fill form",
+                f"{field['name']} (page {field['page']}):",
+                text=field["value"])
+            if not ok:
+                return
+            values[field["name"]] = text
+        out = output_path(src, "filled")
+        _run_job(tab, "Filling form",
+                 lambda ctx: pb.fill_form_fields(src, out, values, password=pw),
                  lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
 
     elif name == "Redact…":

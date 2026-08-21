@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cachyview"
-version = "0.1.0"
-description = "Fast native archive, PDF, image and text toolkit for CachyOS"
+version = "0.2.0"
+description = "Fast native archive, PDF, image and text toolkit for Linux"
 requires-python = ">=3.11"
 dependencies = ["PyQt6", "Pillow"]
 
@@ -17,8 +17,8 @@ dev = ["pytest"]
 cachyview = "cachyview.__main__:main"
 cachyview-cli = "cachyview.integration.cli:main"
 
-[tool.setuptools.packages.find]
-include = ["cachyview*"]
+[tool.setuptools.package-data]
+cachyview = ["data/*.svg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

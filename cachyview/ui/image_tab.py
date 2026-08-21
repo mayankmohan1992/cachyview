@@ -3,22 +3,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QInputDialog, QLabel,
-                             QMessageBox, QScrollArea, QToolBar, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
+                             QInputDialog, QLabel, QListWidget, QListWidgetItem,
+                             QMenu, QMessageBox, QScrollArea, QSplitter, QToolBar,
+                             QToolButton, QVBoxLayout, QWidget)
 
 from ..backends import image as ib
 from ..core.jobs import submit
 
 ZOOM_STEPS = [0.05, 0.1, 0.25, 0.33, 0.5, 0.67, 1.0, 1.5, 2.0, 3.0, 4.0, 8.0]
-
-
-def _shortcut(action, keys: str) -> None:
-    """QToolBar.addAction is typed as returning an optional action."""
-    if action is not None:
-        action.setShortcut(keys)
 
 
 def pil_to_qpixmap(img) -> QPixmap:
@@ -48,10 +43,15 @@ class ImageCanvas(QScrollArea):
 
         from .crop_overlay import CropOverlay
         from .inspect_overlay import InspectOverlay
+        from .image_markup import MarkupOverlay
         self.crop = CropOverlay(self._label)
         self.crop.hide()
         self.inspect = InspectOverlay(self._label)
         self.inspect.hide()
+        self.markup = MarkupOverlay(self._label)
+        self.markup.hide()
+        self._label.setStyleSheet(
+            "background-color: #c8c8c8; background-image: none;")
 
     @property
     def zoom(self) -> float:
@@ -87,20 +87,32 @@ class ImageCanvas(QScrollArea):
         # The inspect overlay tracks zoom/geometry the same way.
         self.inspect.setGeometry(0, 0, width, height)
         self.inspect.configure(self._zoom, self._pixmap.size())
+        self.markup.setGeometry(0, 0, width, height)
+        self.markup.configure(self._zoom)
 
-    def set_zoom(self, value: float, *, fit: bool = False) -> None:
+    def set_zoom(self, value: float, *, fit: bool = False, anchor=None) -> None:
+        old = self._zoom
         self._fit = fit
         self._zoom = max(0.01, min(32.0, value))
+        hbar = self.horizontalScrollBar()
+        vbar = self.verticalScrollBar()
+        mx = my = None
+        if anchor is not None:
+            mx, my = anchor
         self._redraw()
+        if mx is not None and old > 1e-6 and hbar is not None and vbar is not None:
+            ratio = self._zoom / old
+            hbar.setValue(int(mx * ratio - (mx - hbar.value())))
+            vbar.setValue(int(my * ratio - (my - vbar.value())))
 
-    def zoom_in(self) -> None:
+    def zoom_in(self, *, anchor=None) -> None:
         nxt = next((z for z in ZOOM_STEPS if z > self._zoom + 1e-6), ZOOM_STEPS[-1])
-        self.set_zoom(nxt)
+        self.set_zoom(nxt, anchor=anchor)
 
-    def zoom_out(self) -> None:
+    def zoom_out(self, *, anchor=None) -> None:
         prv = next((z for z in reversed(ZOOM_STEPS) if z < self._zoom - 1e-6),
                    ZOOM_STEPS[0])
-        self.set_zoom(prv)
+        self.set_zoom(prv, anchor=anchor)
 
     def fit_to_window(self) -> None:
         self.set_zoom(self._zoom, fit=True)
@@ -137,7 +149,10 @@ class ImageCanvas(QScrollArea):
     def wheelEvent(self, a0) -> None:  # noqa: N802
         if a0 is not None and a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
             delta = a0.angleDelta().y()
-            self.zoom_in() if delta > 0 else self.zoom_out()
+            pos = a0.position()
+            anchor = (self.horizontalScrollBar().value() + int(pos.x()),
+                      self.verticalScrollBar().value() + int(pos.y()))
+            self.zoom_in(anchor=anchor) if delta > 0 else self.zoom_out(anchor=anchor)
             a0.accept()
         else:
             super().wheelEvent(a0)
@@ -193,58 +208,138 @@ class ImageTab(QWidget):
         self.canvas.inspect.readout.connect(self.inspect_readout)
         self.status = QLabel(self)
 
+        from .icons import add_action, icon_button, style_bar
+
         bar = QToolBar(self)
-        _shortcut(bar.addAction("Save", self.save), "Ctrl+S")
-        bar.addAction("Save As…", self.save_as)
+        style_bar(bar)
+        add_action(bar, "document-save", "Save", self.save,
+                   tooltip="Save (Ctrl+S)")
+        add_action(bar, "document-save-as", "Save As…", self.save_as)
         bar.addSeparator()
-        _shortcut(bar.addAction("Undo", self.undo), "Ctrl+Z")
-        _shortcut(bar.addAction("Redo", self.redo), "Ctrl+Shift+Z")
+        add_action(bar, "edit-undo", "Undo", self.undo,
+                   tooltip="Undo (Ctrl+Z)")
+        add_action(bar, "edit-redo", "Redo", self.redo, shortcut="Ctrl+Shift+Z")
         bar.addSeparator()
-        bar.addAction("Rotate ⟲", lambda: self.add_op("rotate", angle=270))
-        bar.addAction("Rotate ⟳", lambda: self.add_op("rotate", angle=90))
-        bar.addAction("Flip ↔", lambda: self.add_op("flip", horizontal=True))
-        bar.addAction("Flip ↕", lambda: self.add_op("flip", horizontal=False))
+        add_action(bar, "object-rotate-left", "Rotate left",
+                   lambda: self.add_op("rotate", angle=270))
+        add_action(bar, "object-rotate-right", "Rotate right",
+                   lambda: self.add_op("rotate", angle=90))
+        add_action(bar, "object-flip-horizontal", "Flip horizontal",
+                   lambda: self.add_op("flip", horizontal=True))
+        add_action(bar, "object-flip-vertical", "Flip vertical",
+                   lambda: self.add_op("flip", horizontal=False))
         bar.addSeparator()
-        bar.addAction("Lossless ⟲", lambda: self.lossless_rotate(270))
-        bar.addAction("Lossless ⟳", lambda: self.lossless_rotate(90))
+        add_action(bar, "object-rotate-left", "Lossless rotate left",
+                   lambda: self.lossless_rotate(270),
+                   tooltip="Lossless JPEG rotate left")
+        add_action(bar, "object-rotate-right", "Lossless rotate right",
+                   lambda: self.lossless_rotate(90),
+                   tooltip="Lossless JPEG rotate right")
         bar.addSeparator()
         # Inspection tools (non-destructive): picker, ruler, magnifier.
         self._inspect_actions: dict[str, object] = {}
-        for label, mode in (("Picker", "picker"),
-                            ("Ruler", "ruler"),
-                            ("Magnifier", "magnifier")):
-            act = bar.addAction(label, lambda m=mode: self.set_inspect_mode(m))
+        for label, mode, names in (
+            ("Picker", "picker", ("color-picker", "tool-color-picker")),
+            ("Ruler", "ruler", ("measure", "tool-measure")),
+            ("Magnifier", "magnifier", ("zoom", "page-zoom")),
+        ):
+            act = add_action(bar, names, label,
+                             lambda m=mode: self.set_inspect_mode(m),
+                             checkable=True)
             if act is not None:
-                act.setCheckable(True)
                 self._inspect_actions[mode] = act
         bar.addSeparator()
-        self.crop_action = bar.addAction("Crop", self.toggle_crop)
-        if self.crop_action is not None:
-            self.crop_action.setCheckable(True)
-        bar.addAction("Resize…", self.resize_dialog)
-        bar.addAction("Grayscale", lambda: self.add_op("grayscale"))
-        bar.addAction("Invert", lambda: self.add_op("invert"))
-        bar.addAction("Auto contrast", lambda: self.add_op("autocontrast"))
+        self.crop_action = add_action(
+            bar, ("transform-crop", "edit-cut"), "Crop", self.toggle_crop,
+            checkable=True)
+        add_action(bar, "transform-scale", "Resize…", self.resize_dialog)
+        add_action(bar, "transform-crop-resize", "Canvas…", self.canvas_dialog)
+        add_action(bar, "object-rotate-right", "Straighten…",
+                   self.straighten_dialog)
+        filt = icon_button(self, ("draw-brush", "image-filter"), "Filters")
+        filt.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        fmenu = QMenu(self)
+        fmenu.addAction("Grayscale", lambda: self.add_op("grayscale"))
+        fmenu.addAction("Invert", lambda: self.add_op("invert"))
+        fmenu.addAction("Auto contrast", lambda: self.add_op("autocontrast"))
+        fmenu.addSeparator()
+        for name, op, args in (
+            ("Gaussian blur", "blur", {"radius": 2.0}),
+            ("Unsharp mask", "unsharp", {}),
+            ("Median denoise", "median", {"size": 3}),
+            ("Smooth", "smooth", {}),
+            ("Detail", "detail", {}),
+            ("Edge enhance", "edge_enhance", {}),
+            ("Emboss", "emboss", {}),
+            ("Find edges", "find_edges", {}),
+            ("Contour", "contour", {}),
+            ("Sepia", "sepia", {}),
+            ("Vignette", "vignette", {}),
+            ("Posterize", "posterize", {"bits": 4}),
+            ("Solarize", "solarize", {}),
+            ("Equalize", "equalize", {}),
+            ("Add noise", "noise", {"amount": 12}),
+        ):
+            fmenu.addAction(name, lambda o=op, a=args: self.add_op(o, **a))
+        filt.setMenu(fmenu)
+        bar.addWidget(filt)
+        mark = icon_button(self, ("draw-freehand", "draw-rectangle"), "Markup")
+        mark.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        mmenu = QMenu(self)
+        for kind in ("rectangle", "oval", "line", "arrow", "freehand", "highlight", "text"):
+            mmenu.addAction(kind.title(), lambda k=kind: self.set_markup_mode(k))
+        mmenu.addAction("Off", lambda: self.set_markup_mode("off"))
+        mark.setMenu(mmenu)
+        bar.addWidget(mark)
+        add_action(bar, "document-export", "Export…", self.export_file)
+        add_action(bar, "media-playback-start", "Slideshow", self.slideshow)
+        add_action(bar, "go-previous", "Previous image", self.prev_image)
+        add_action(bar, "go-next", "Next image", self.next_image)
         bar.addSeparator()
 
         zoom = QToolBar(self)
-        zoom.addAction("−", self.canvas.zoom_out)
-        zoom.addAction("+", self.canvas.zoom_in)
-        zoom.addAction("Fit", self.canvas.fit_to_window)
-        zoom.addAction("1:1", self.canvas.actual_size)
+        style_bar(zoom)
+        add_action(zoom, "zoom-out", "Zoom out", self.canvas.zoom_out)
+        add_action(zoom, "zoom-in", "Zoom in", self.canvas.zoom_in)
+        add_action(zoom, "zoom-fit-best", "Fit", self.canvas.fit_to_window)
+        add_action(zoom, "zoom-original", "1:1", self.canvas.actual_size)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.addWidget(bar, 1)
         top.addWidget(zoom)
 
+        from .image_adjust import AdjustPanel
+        self.adjust = AdjustPanel(self)
+        self.adjust.adjusted.connect(self._on_adjust)
+        self.adjust.toggled.connect(self._on_adjust_toggle)
+        self.adjust.reset_all.connect(self._reset_adjust)
+        self._adjust_keys = set()
+        self.film = QListWidget(self)
+        self.film.setMaximumHeight(88)
+        self.film.setFlow(QListWidget.Flow.LeftToRight)
+        self.film.setViewMode(QListWidget.ViewMode.IconMode)
+        self.film.itemActivated.connect(self._film_open)
+        self._slideshow = None
+        self._anim = None
+        self._frames: list = []
+
+        split = QSplitter(Qt.Orientation.Horizontal, self)
+        split.addWidget(self.canvas)
+        split.addWidget(self.adjust)
+        split.setStretchFactor(0, 5)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addLayout(top)
-        layout.addWidget(self.canvas, 1)
+        layout.addWidget(split, 1)
+        layout.addWidget(self.film)
         layout.addWidget(self.status)
 
+        self.canvas.markup.committed.connect(self._markup_done)
+        self._fill_film()
+        self._maybe_animate()
         self._refresh()
 
         # If a persisted edit stack was replayed, rebuild the preview now that
@@ -309,6 +404,7 @@ class ImageTab(QWidget):
             pass
         self._source_path = Path(path)
         self.current = self.original.copy()
+        self._maybe_animate()
         self._refresh()
         self.modified_changed.emit(False)
 
@@ -404,16 +500,182 @@ class ImageTab(QWidget):
         super().keyPressEvent(a0)
 
     def resize_dialog(self) -> None:
-        width, ok = QInputDialog.getInt(
-            self, "Resize", "New width in pixels:", self.current.width, 1, 100000)
-        if ok:
-            self.add_op("resize", width=width)
+        from .image_resize import ResizeDialog
+        dialog = ResizeDialog(self.current.width, self.current.height, self)
+        if dialog.exec() == dialog.DialogCode.Accepted:
+            w, h = dialog.result_size()
+            self.add_op("resize", width=w, height=h, keep_aspect=False)
+
+    def canvas_dialog(self) -> None:
+        from .image_resize import CanvasDialog
+        dialog = CanvasDialog(self.current.width, self.current.height, self)
+        if dialog.exec() == dialog.DialogCode.Accepted:
+            self.add_op("canvas", **dialog.values())
+
+    def straighten_dialog(self) -> None:
+        angle, ok = QInputDialog.getDouble(
+            self, "Straighten", "Angle (degrees):", 0, -45, 45, 1)
+        if ok and abs(angle) > 0.01:
+            self.add_op("straighten", angle=angle)
+
+    def export_file(self) -> None:
+        from .image_resize import ExportDialog
+        dialog = ExportDialog(self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        target, _ = QFileDialog.getSaveFileName(
+            self, "Export image", str(self.path),
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp *.tiff)")
+        if not target:
+            return
+        img = self.current
+        edge = dialog.max_edge.value()
+        if edge:
+            img = ib.apply_ops(img, [ib.Op("thumbnail", {"size": edge})])
+        try:
+            ib.save(img, target, quality=dialog.quality.value(),
+                    keep_exif=not dialog.strip.isChecked(), source=self.original)
+        except ib.ImageError as exc:
+            QMessageBox.warning(self, "Export", str(exc))
+            return
+        self.status.setText(f"Exported {Path(target).name}")
+
+    def set_markup_mode(self, kind: str) -> None:
+        self.canvas.markup.set_mode(kind)
+        self.status.setText("Markup off." if kind == "off" else f"Markup: {kind}")
+
+    def _markup_done(self, kind, points, color, text) -> None:
+        self.add_op("draw", kind=kind, points=points, color=color, text=text)
+        self.canvas.markup.set_mode("off")
+
+    def _on_adjust(self, name: str, args: dict) -> None:
+        self.ops = [op for op in self.ops if op.name != name]
+        self.add_op(name, **args)
+        self._adjust_keys.add(name)
+
+    def _on_adjust_toggle(self, name: str, on: bool) -> None:
+        self.ops = [op for op in self.ops if op.name != name]
+        if on:
+            self.add_op(name)
+        else:
+            self._persist()
+            self._reapply()
+
+    def _reset_adjust(self) -> None:
+        names = {"brightness", "contrast", "saturation", "sharpness", "gamma",
+                 "exposure", "temperature", "tint", "hue", "opacity",
+                 "grayscale", "invert"}
+        self.ops = [op for op in self.ops if op.name not in names]
+        self._persist()
+        self._reapply()
+
+    def _siblings(self) -> list[Path]:
+        from ..core.mime import IMAGE_EXTS
+        parent = self.path.parent
+        return sorted(p for p in parent.iterdir()
+                      if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
+
+    def next_image(self) -> None:
+        sibs = self._siblings()
+        if self.path in sibs:
+            i = (sibs.index(self.path) + 1) % len(sibs)
+            self._open_sibling(sibs[i])
+
+    def prev_image(self) -> None:
+        sibs = self._siblings()
+        if self.path in sibs:
+            i = (sibs.index(self.path) - 1) % len(sibs)
+            self._open_sibling(sibs[i])
+
+    def _open_sibling(self, path: Path) -> None:
+        if self.is_modified():
+            choice = QMessageBox.question(
+                self, "Unsaved edits",
+                "Save edits before switching image?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel)
+            if choice == QMessageBox.StandardButton.Cancel:
+                return
+            if choice == QMessageBox.StandardButton.Save and not self.save():
+                return
+        self.reload_from(path)
+        self._fill_film()
+
+    def _fill_film(self) -> None:
+        self.film.clear()
+        for p in self._siblings()[:80]:
+            item = QListWidgetItem(p.name)
+            item.setData(Qt.ItemDataRole.UserRole, str(p))
+            self.film.addItem(item)
+
+    def _film_open(self, item) -> None:
+        path = Path(item.data(Qt.ItemDataRole.UserRole))
+        if path != self.path:
+            self._open_sibling(path)
+
+    def slideshow(self) -> None:
+        from PyQt6.QtCore import QTimer
+        if self._slideshow is not None:
+            self._slideshow.stop()
+            self._slideshow = None
+            self.status.setText("Slideshow stopped.")
+            return
+        self._slideshow = QTimer(self)
+        self._slideshow.setInterval(3000)
+        self._slideshow.timeout.connect(self.next_image)
+        self._slideshow.start()
+        self.status.setText("Slideshow — next image every 3s.")
+
+    def _maybe_animate(self) -> None:
+        if self._anim is not None:
+            self._anim.stop()
+            self._anim = None
+        if not self.info.is_animated:
+            return
+        try:
+            self._frames = [pil_to_qpixmap(f) for f in ib.load_frames(self.path)]
+        except Exception:
+            self._frames = []
+            return
+        if len(self._frames) < 2:
+            return
+        self._anim_i = 0
+        self._anim = QTimer(self)
+        self._anim.setInterval(80)
+        self._anim.timeout.connect(self._anim_tick)
+        self._anim.start()
+
+    def _anim_tick(self) -> None:
+        if not self._frames:
+            return
+        self._anim_i = (self._anim_i + 1) % len(self._frames)
+        self.canvas.set_image(self._frames[self._anim_i])
+
+    def print_file(self) -> None:
+        from PyQt6.QtGui import QPainter
+        from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
+        printer = QPrinter()
+        if QPrintDialog(printer, self).exec() != QPrintDialog.DialogCode.Accepted:
+            return
+        painter = QPainter(printer)
+        pix = pil_to_qpixmap(self.current)
+        painter.drawPixmap(0, 0, pix.scaled(painter.viewport().size(),
+                                            Qt.AspectRatioMode.KeepAspectRatio))
+        painter.end()
 
     # --- saving ----------------------------------------------------------
     def is_modified(self) -> bool:
         return bool(self.ops)
 
     def save(self) -> bool:
+        if self.ops and self.path.exists() and self.isVisible():
+            choice = QMessageBox.question(
+                self, "Overwrite file",
+                f"Overwrite {self.path.name} with the edited image?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if choice != QMessageBox.StandardButton.Yes:
+                return False
         return self._write(self.path)
 
     def save_as(self) -> bool:

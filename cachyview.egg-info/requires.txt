@@ -1,0 +1,10 @@
+PyQt6
+Pillow
+
+[dev]
+pytest
+
+[pdf]
+PyMuPDF
+pikepdf
+img2pdf

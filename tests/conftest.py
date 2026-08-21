@@ -12,4 +12,8 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# Isolate persistent UI state from the developer's real config.
+os.environ.setdefault("XDG_CONFIG_HOME", os.path.join(
+    os.environ.get("TMPDIR", "/tmp"), "cachyview-pytest-config"))
+
 import cachyview  # noqa: E402,F401  (import for its sys.path guard side effect)

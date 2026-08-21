@@ -27,7 +27,7 @@ OPERATIONS = [
     ("PDF → Watermark 'CachyView'", {"tool": "watermark", "text": "CachyView"}),
     ("Image → Rotate 90°", {"tool": "rotate", "angle": 90}),
     ("Image → Grayscale", {"tool": "grayscale"}),
-    ("Image → Resize 50%", {"tool": "resize", "width": 0, "height": 0}),
+    ("Image → Resize 50%", {"tool": "scale", "factor": 0.5}),
     ("Image → Convert to PNG", {"tool": "convert", "format": "png"}),
     ("Image → Convert to JPEG", {"tool": "convert", "format": "jpeg"}),
 ]

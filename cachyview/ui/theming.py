@@ -95,6 +95,9 @@ SHORTCUTS: list[tuple[str, str, str]] = [
     ("Toggle ruler", "R", "Image ruler (toggle)"),
     ("Toggle magnifier", "M", "Image magnifier (toggle)"),
     ("Show shortcuts", "?", "Show this list"),
+    ("Command palette", "Ctrl+K", "Fuzzy-run any action"),
+    ("Inspector", "Ctrl+Shift+I", "Toggle the file info sidebar"),
+    ("Find", "Ctrl+F", "Find in the current document"),
 ]
 
 

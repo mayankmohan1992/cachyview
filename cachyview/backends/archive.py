@@ -622,3 +622,92 @@ def create(archive: str | os.PathLike, sources: list[str | os.PathLike],
     if ctx is not None:
         ctx.progress(100, "Done")
     return target
+
+
+# --------------------------------------------------------------------------
+# mutation (add / delete / rename) — 7z only; some formats are read-only
+# --------------------------------------------------------------------------
+
+_READ_ONLY_SUFFIXES = {
+    ".iso", ".rpm", ".deb", ".cab", ".cpio", ".apk", ".jar", ".xpi",
+    ".epub", ".cbz", ".cbr", ".cb7",
+}
+
+
+def can_mutate(path: str | os.PathLike) -> bool:
+    """True when 7z can add/delete/rename members of this archive."""
+    p = Path(path)
+    if p.suffix.lower() in _READ_ONLY_SUFFIXES:
+        return False
+    if any(p.name.lower().endswith(d) for d in (
+            ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar.lz4")):
+        return False
+    if p.suffix.lower() in {".tar", ".tgz", ".tbz2", ".txz", ".tzst"}:
+        return False
+    return _sevenzip() is not None
+
+
+def _mutate_cmd(archive: Path, verb: str, extra: list[str],
+                password: str | None) -> None:
+    seven = _sevenzip()
+    if not seven:
+        raise ArchiveError("Modifying archives needs the '7zip' package.")
+    if not can_mutate(archive):
+        raise ArchiveError(f"{archive.suffix or archive.name} archives cannot "
+                           "be edited in place; extract and create a new one.")
+    cmd = [seven, verb]
+    if password:
+        cmd.append(f"-p{password}")
+    cmd += ["--", str(archive), *extra]
+    res = _run(cmd, password=password, timeout=DEFAULT_TIMEOUT * 4)
+    if res.returncode != 0:
+        raise ArchiveError((res.stdout + res.stderr).strip()[-400:]
+                           or f"7z {verb} failed")
+
+
+def add_to(archive: str | os.PathLike, sources: list[str | os.PathLike],
+           password: str | None = None, *, ctx=None) -> Path:
+    """Add files or folders to an existing zip/7z archive."""
+    if not sources:
+        raise ArchiveError("Nothing to add.")
+    target = Path(archive)
+    if ctx is not None:
+        ctx.progress(-1, f"Adding to {target.name}…")
+    _mutate_cmd(target, "a", [str(s) for s in sources], password)
+    if ctx is not None:
+        ctx.progress(100, "Done")
+    return target
+
+
+def delete_members(archive: str | os.PathLike, members: list[str],
+                   password: str | None = None, *, ctx=None) -> Path:
+    if not members:
+        raise ArchiveError("Nothing to delete.")
+    target = Path(archive)
+    if ctx is not None:
+        ctx.progress(-1, "Deleting…")
+    _mutate_cmd(target, "d", members, password)
+    if ctx is not None:
+        ctx.progress(100, "Done")
+    return target
+
+
+def rename_member(archive: str | os.PathLike, old: str, new: str,
+                  password: str | None = None) -> Path:
+    old, new = old.strip().replace("\\", "/"), new.strip().replace("\\", "/")
+    if not old or not new or old == new:
+        raise ArchiveError("Need a distinct new name.")
+    target = Path(archive)
+    _mutate_cmd(target, "rn", [old, new], password)
+    return target
+
+
+def repair_archive(path: str | os.PathLike, password: str | None = None) -> bool:
+    """Ask 7z to repair. Returns True when the tool reported success."""
+    seven = _sevenzip()
+    if not seven:
+        raise ArchiveError("Repair needs the '7zip' package.")
+    src = Path(path)
+    cmd = [seven, "r", f"-p{'' if password is None else password}", "--", str(src)]
+    res = _run(cmd, password=password)
+    return res.returncode == 0

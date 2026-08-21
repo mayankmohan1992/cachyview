@@ -9,6 +9,24 @@ Release notes for each version are also generated automatically on the
 ## [Unreleased]
 
 ### Added
+- Preview-class shell: single-instance hand-off, command palette (Ctrl+K),
+  inspector sidebar, empty-state recents, Save As / Print / Open With /
+  containing folder / share, and `--peek` Quick Look windows.
+- Continuous scrolling PDF view, search hit navigation via MuPDF, copy page
+  text, print, deferred annotation save, and AcroForm fill.
+- Image Adjust Color sliders, resize/canvas/straighten dialogs, classic
+  filters (blur, unsharp, median, sepia, vignette, … — no AI), pixel markup,
+  folder filmstrip, slideshow, and export-with-quality.
+- Text syntax highlighting, find/replace, encoding/newline pickers, markdown
+  and CSV views, hex viewer for binaries, and a two-file text diff.
+- Archive preview pane, CRC/ratio columns, add/delete/rename, create dialog,
+  comic mode, and Dolphin Extract-To / Test / Compress fixes.
+
+### Changed
+- Theme icons replace emoji in the PDF/image chrome where the icon theme
+  provides them; batch "resize 50%" now actually scales by half.
+
+### Added
 - PDF markup expansion: rectangle, oval, line, arrow and freehand sketch
   annotations, plus strikethrough — all saved inside the PDF.
 - Sidebar toggle and a zoom slider in the PDF view.

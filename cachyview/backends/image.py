@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 # Pillow refuses very large images to avoid decompression bombs.  Keep that
 # protection but raise the ceiling: 256 Mpx covers legitimate scans and panoramas.
@@ -250,6 +250,268 @@ def _op_thumbnail(img: Image.Image, *, size: int = 256) -> Image.Image:
     return out
 
 
+def _split_alpha(img: Image.Image) -> tuple[Image.Image, Image.Image | None]:
+    if img.mode in ("RGBA", "LA"):
+        return img.convert("RGB"), img.getchannel("A")
+    if img.mode == "P" and "transparency" in img.info:
+        rgba = img.convert("RGBA")
+        return rgba.convert("RGB"), rgba.getchannel("A")
+    return img.convert("RGB") if img.mode != "RGB" else img, None
+
+
+def _merge_alpha(rgb: Image.Image, alpha: Image.Image | None) -> Image.Image:
+    if alpha is None:
+        return rgb
+    out = rgb.convert("RGBA")
+    out.putalpha(alpha.resize(rgb.size, Image.Resampling.NEAREST)
+                 if alpha.size != rgb.size else alpha)
+    return out
+
+
+def _op_gamma(img: Image.Image, *, value: float = 1.0) -> Image.Image:
+    if value <= 0:
+        raise ImageError("Gamma must be positive.")
+    inv = 1.0 / float(value)
+    lut = [min(255, int(pow(i / 255.0, inv) * 255 + 0.5)) for i in range(256)]
+    rgb, alpha = _split_alpha(img)
+    rgb = rgb.point(lut * 3)
+    return _merge_alpha(rgb, alpha)
+
+
+def _op_exposure(img: Image.Image, *, value: float = 0.0) -> Image.Image:
+    """*value* is EV stops: +1 doubles brightness."""
+    factor = 2.0 ** float(value)
+    return _op_brightness(img, value=factor)
+
+
+def _op_temperature(img: Image.Image, *, value: float = 0.0) -> Image.Image:
+    """Warm (+) / cool (−) by scaling red vs blue. Range roughly −100..100."""
+    rgb, alpha = _split_alpha(img)
+    r, g, b = rgb.split()
+    warm = max(-100.0, min(100.0, float(value))) / 100.0
+    r = r.point(lambda p: max(0, min(255, int(p * (1 + 0.35 * warm)))))
+    b = b.point(lambda p: max(0, min(255, int(p * (1 - 0.35 * warm)))))
+    return _merge_alpha(Image.merge("RGB", (r, g, b)), alpha)
+
+
+def _op_tint(img: Image.Image, *, value: float = 0.0) -> Image.Image:
+    """Green (+) / magenta (−) tint. Range roughly −100..100."""
+    rgb, alpha = _split_alpha(img)
+    r, g, b = rgb.split()
+    t = max(-100.0, min(100.0, float(value))) / 100.0
+    g = g.point(lambda p: max(0, min(255, int(p * (1 + 0.25 * t)))))
+    r = r.point(lambda p: max(0, min(255, int(p * (1 - 0.12 * t)))))
+    return _merge_alpha(Image.merge("RGB", (r, g, b)), alpha)
+
+
+def _op_hue(img: Image.Image, *, value: float = 0.0) -> Image.Image:
+    """Rotate hue by *value* degrees."""
+    rgb, alpha = _split_alpha(img)
+    hsv = rgb.convert("HSV")
+    h, s, v = hsv.split()
+    shift = int((float(value) % 360.0) / 360.0 * 255)
+    h = h.point(lambda p: (p + shift) % 256)
+    out = Image.merge("HSV", (h, s, v)).convert("RGB")
+    return _merge_alpha(out, alpha)
+
+
+def _op_opacity(img: Image.Image, *, value: float = 1.0) -> Image.Image:
+    value = max(0.0, min(1.0, float(value)))
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    r, g, b, a = img.split()
+    a = a.point(lambda p: int(p * value))
+    return Image.merge("RGBA", (r, g, b, a))
+
+
+def _op_sepia(img: Image.Image) -> Image.Image:
+    rgb, alpha = _split_alpha(img)
+    gray = ImageOps.grayscale(rgb)
+    r = gray.point(lambda p: min(255, int(p * 1.07)))
+    g = gray.point(lambda p: min(255, int(p * 0.74)))
+    b = gray.point(lambda p: min(255, int(p * 0.43)))
+    return _merge_alpha(Image.merge("RGB", (r, g, b)), alpha)
+
+
+def _op_posterize(img: Image.Image, *, bits: int = 4) -> Image.Image:
+    bits = max(1, min(8, int(bits)))
+    rgb, alpha = _split_alpha(img)
+    return _merge_alpha(ImageOps.posterize(rgb, bits), alpha)
+
+
+def _op_solarize(img: Image.Image, *, threshold: int = 128) -> Image.Image:
+    rgb, alpha = _split_alpha(img)
+    return _merge_alpha(ImageOps.solarize(rgb, int(threshold)), alpha)
+
+
+def _op_equalize(img: Image.Image) -> Image.Image:
+    rgb, alpha = _split_alpha(img)
+    return _merge_alpha(ImageOps.equalize(rgb), alpha)
+
+
+def _op_unsharp(img: Image.Image, *, radius: float = 2.0,
+                percent: int = 150, threshold: int = 3) -> Image.Image:
+    return img.filter(ImageFilter.UnsharpMask(
+        radius=float(radius), percent=int(percent), threshold=int(threshold)))
+
+
+def _op_median(img: Image.Image, *, size: int = 3) -> Image.Image:
+    size = int(size)
+    if size % 2 == 0:
+        size += 1
+    size = max(3, min(15, size))
+    return img.filter(ImageFilter.MedianFilter(size))
+
+
+def _op_smooth(img: Image.Image) -> Image.Image:
+    return img.filter(ImageFilter.SMOOTH)
+
+
+def _op_detail(img: Image.Image) -> Image.Image:
+    return img.filter(ImageFilter.DETAIL)
+
+
+def _op_edge_enhance(img: Image.Image) -> Image.Image:
+    return img.filter(ImageFilter.EDGE_ENHANCE)
+
+
+def _op_emboss(img: Image.Image) -> Image.Image:
+    return img.filter(ImageFilter.EMBOSS)
+
+
+def _op_find_edges(img: Image.Image) -> Image.Image:
+    return img.filter(ImageFilter.FIND_EDGES)
+
+
+def _op_contour(img: Image.Image) -> Image.Image:
+    return img.filter(ImageFilter.CONTOUR)
+
+
+def _op_vignette(img: Image.Image, *, strength: float = 0.55) -> Image.Image:
+    rgb, alpha = _split_alpha(img)
+    w, h = rgb.size
+    strength = max(0.0, min(1.0, float(strength)))
+    mask = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(mask)
+    # White centre, dark corners; invert later via multiply.
+    pad_x, pad_y = int(w * 0.08), int(h * 0.08)
+    draw.ellipse((-pad_x, -pad_y, w + pad_x, h + pad_y), fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=max(w, h) * 0.18))
+    dark = Image.new("RGB", (w, h), (0, 0, 0))
+    # Blend original toward black using (1-mask)*strength
+    shade = ImageChops.multiply(rgb, Image.merge("RGB", (mask, mask, mask)))
+    out = Image.blend(rgb, shade, strength)
+    _ = dark
+    return _merge_alpha(out, alpha)
+
+
+def _op_noise(img: Image.Image, *, amount: int = 12) -> Image.Image:
+    rgb, alpha = _split_alpha(img)
+    amount = max(1, min(64, int(amount)))
+    n = Image.effect_noise(rgb.size, amount * 4).convert("RGB")
+    out = ImageChops.add(rgb, n, scale=2.0, offset=-128)
+    return _merge_alpha(out, alpha)
+
+
+def _op_straighten(img: Image.Image, *, angle: float = 0.0) -> Image.Image:
+    """Rotate by a small angle without expanding (clips the corners)."""
+    fill = (255, 255, 255, 0) if img.mode == "RGBA" else (255, 255, 255)
+    return img.rotate(-float(angle), expand=False,
+                      resample=Image.Resampling.BICUBIC, fillcolor=fill)
+
+
+def _op_canvas(img: Image.Image, *, width: int, height: int,
+               anchor: str = "center", fill: str = "#ffffff") -> Image.Image:
+    width, height = int(width), int(height)
+    if width < 1 or height < 1:
+        raise ImageError("Canvas size must be positive.")
+    mode = "RGBA" if img.mode == "RGBA" or str(fill).endswith("00") else img.mode
+    if mode == "RGBA":
+        canvas = Image.new("RGBA", (width, height), fill)
+        src = img.convert("RGBA")
+    else:
+        canvas = Image.new("RGB", (width, height), fill)
+        src = img.convert("RGB")
+    ax, ay = {
+        "top-left": (0, 0), "top": ((width - src.width) // 2, 0),
+        "top-right": (width - src.width, 0),
+        "left": (0, (height - src.height) // 2),
+        "center": ((width - src.width) // 2, (height - src.height) // 2),
+        "right": (width - src.width, (height - src.height) // 2),
+        "bottom-left": (0, height - src.height),
+        "bottom": ((width - src.width) // 2, height - src.height),
+        "bottom-right": (width - src.width, height - src.height),
+    }.get(anchor, ((width - src.width) // 2, (height - src.height) // 2))
+    canvas.paste(src, (ax, ay), src if src.mode == "RGBA" else None)
+    return canvas
+
+
+def _op_draw(img: Image.Image, *, kind: str = "rectangle",
+             points: list | None = None, color: str = "#ff3333",
+             width: int = 3, text: str = "", font_size: int = 24,
+             fill: str | None = None) -> Image.Image:
+    """Bake a vector mark into pixels (Preview-style image markup)."""
+    out = img.convert("RGBA").copy()
+    overlay = Image.new("RGBA", out.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay, "RGBA")
+    pts = [(int(p[0]), int(p[1])) for p in (points or [])]
+    w = max(1, int(width))
+    if kind in ("rectangle", "highlight") and len(pts) >= 2:
+        box = [pts[0], pts[1]]
+        if kind == "highlight":
+            draw.rectangle(box, fill=fill or color + "66" if len(color) == 7 else color)
+        else:
+            draw.rectangle(box, outline=color, width=w,
+                           fill=fill)
+    elif kind == "oval" and len(pts) >= 2:
+        draw.ellipse([pts[0], pts[1]], outline=color, width=w, fill=fill)
+    elif kind == "line" and len(pts) >= 2:
+        draw.line(pts, fill=color, width=w)
+    elif kind == "arrow" and len(pts) >= 2:
+        draw.line(pts, fill=color, width=w)
+        x0, y0 = pts[-2]
+        x1, y1 = pts[-1]
+        import math
+        ang = math.atan2(y1 - y0, x1 - x0)
+        ah = 12 + w
+        for da in (2.5, -2.5):
+            ax = x1 - ah * math.cos(ang + da)
+            ay = y1 - ah * math.sin(ang + da)
+            draw.line([(x1, y1), (ax, ay)], fill=color, width=w)
+    elif kind == "freehand" and len(pts) >= 2:
+        draw.line(pts, fill=color, width=w, joint="curve")
+    elif kind == "text" and pts:
+        draw.text(pts[0], text or "Text", fill=color)
+    out = Image.alpha_composite(out, overlay)
+    return out if img.mode == "RGBA" else out.convert(img.mode)
+
+
+def histograms(img: Image.Image) -> dict[str, list[int]]:
+    """256-bin histograms for luma and RGB (on a downscaled copy)."""
+    sample = img.convert("RGB")
+    if max(sample.size) > 512:
+        sample.thumbnail((512, 512), Image.Resampling.BILINEAR)
+    r, g, b = sample.split()
+    luma = sample.convert("L")
+    return {"r": r.histogram()[:256], "g": g.histogram()[:256],
+            "b": b.histogram()[:256], "luma": luma.histogram()[:256]}
+
+
+def load_frames(path: str | os.PathLike) -> list[Image.Image]:
+    """All frames of an animated image (GIF/WebP). Single-frame images: one item."""
+    p = Path(path)
+    frames: list[Image.Image] = []
+    with Image.open(p) as img:
+        n = getattr(img, "n_frames", 1) or 1
+        for i in range(n):
+            try:
+                img.seek(i)
+            except EOFError:
+                break
+            frames.append(img.convert("RGBA").copy())
+    return frames or [load(p)]
+
+
 OPS: dict[str, Callable[..., Image.Image]] = {
     "rotate": _op_rotate,
     "flip": _op_flip,
@@ -267,6 +529,29 @@ OPS: dict[str, Callable[..., Image.Image]] = {
     "sharpen": _op_sharpen,
     "border": _op_border,
     "thumbnail": _op_thumbnail,
+    "gamma": _op_gamma,
+    "exposure": _op_exposure,
+    "temperature": _op_temperature,
+    "tint": _op_tint,
+    "hue": _op_hue,
+    "opacity": _op_opacity,
+    "sepia": _op_sepia,
+    "posterize": _op_posterize,
+    "solarize": _op_solarize,
+    "equalize": _op_equalize,
+    "unsharp": _op_unsharp,
+    "median": _op_median,
+    "smooth": _op_smooth,
+    "detail": _op_detail,
+    "edge_enhance": _op_edge_enhance,
+    "emboss": _op_emboss,
+    "find_edges": _op_find_edges,
+    "contour": _op_contour,
+    "vignette": _op_vignette,
+    "noise": _op_noise,
+    "straighten": _op_straighten,
+    "canvas": _op_canvas,
+    "draw": _op_draw,
 }
 
 
