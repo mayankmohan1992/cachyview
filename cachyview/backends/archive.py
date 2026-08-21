@@ -300,6 +300,36 @@ def _tar_member_name(raw: str) -> str:
     return name or raw
 
 
+def _open_tar(path: Path) -> "tarfile.TarFile":
+    """Open a (possibly compressed) tar, transparently handling zst.
+
+    ``tarfile.open(path)`` defaults to uncompressed mode and does not detect
+    zstd on Python < 3.14, so we ask for transparent decompression.  If that
+    still fails on a .zst file we decompress via the zstandard module or the
+    zstd CLI and open the resulting .tar in memory.
+    """
+    import io
+    try:
+        return tarfile.open(path, "r:*")
+    except (OSError, tarfile.TarError):
+        pass
+    if str(path).lower().endswith((".tar.zst", ".tzst")):
+        raw = None
+        try:
+            import zstandard
+            with open(path, "rb") as fh, \
+                    zstandard.ZstdDecompressor().stream_reader(fh) as d:
+                raw = d.read()
+        except Exception:
+            if shutil.which("zstd"):
+                out = subprocess.run(["zstd", "-d", "-c", str(path)],
+                                     capture_output=True, check=True)
+                raw = out.stdout
+        if raw is not None:
+            return tarfile.open(fileobj=io.BytesIO(raw))
+    raise ArchiveError(f"Could not read {Path(path).name} as a tar archive.")
+
+
 def _list_tar(path: Path) -> ArchiveInfo:
     """List a tar via python's tarfile, which reads through the compression.
 
@@ -309,7 +339,7 @@ def _list_tar(path: Path) -> ArchiveInfo:
     import tarfile
     info = ArchiveInfo(path=path, format="tar")
     try:
-        with tarfile.open(path) as tf:
+        with _open_tar(path) as tf:
             for m in tf.getmembers():
                 if not (m.isfile() or m.isdir()):
                     continue      # skip devices, fifos and links
@@ -328,7 +358,7 @@ def _list_tar(path: Path) -> ArchiveInfo:
 def _extract_tar(src: Path, out: Path, members: list[str] | None) -> list[Path]:
     import tarfile
     written: list[Path] = []
-    with tarfile.open(src) as tf:
+    with _open_tar(src) as tf:
         for m in tf.getmembers():
             if not m.isfile():
                 continue
