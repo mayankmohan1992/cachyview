@@ -15,6 +15,7 @@ depends=(
   'python'
   'python-pyqt6'
   'python-pillow'
+  'python-zstandard'  # tar.zst creation (Python tarfile needs the module)
   'python-ocrmypdf'   # provides the `ocrmypdf` binary the CLI shells out to
   'ghostscript'
   'qpdf'

@@ -38,7 +38,7 @@ uninstall() {
 
 # --- required system packages ------------------------------------------------
 missing=()
-for pkg in python-pyqt6 python-pillow 7zip; do
+for pkg in python-pyqt6 python-pillow python-zstandard 7zip; do
     pacman -Q "$pkg" &>/dev/null || missing+=("$pkg")
 done
 if (( ${#missing[@]} )); then
