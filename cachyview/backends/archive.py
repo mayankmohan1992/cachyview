@@ -30,12 +30,20 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from ..core.sandbox import safe_join
+
+# Importing zstandard registers tarfile's "zst" compression support (Python's
+# tarfile only advertises 'w:zst' once the module is importable).
+try:
+    import zstandard  # noqa: F401
+except ImportError:
+    zstandard = None  # tar.zst creation simply unsupported; other formats fine
 
 # A single archive member may not exceed this ratio of the archive size, and the
 # total may not exceed the absolute cap.  Guards against decompression bombs.
@@ -574,6 +582,25 @@ def _create_tar(target: Path, sources: list[str | os.PathLike], fmt: str) -> Pat
                     p = Path(s)
                     tf.add(p, arcname=p.name)
     except (OSError, tarfile.TarError) as exc:
+        # tarfile's zst mode needs zstandard importable; if that path failed,
+        # fall back to writing an uncompressed tar and piping through zstd.
+        if "zst" in mode and shutil.which("zstd"):
+            import tempfile
+            raw = target.with_suffix(".tar")
+            with tarfile.open(raw, "w") as tf:
+                for src in sources:
+                    s = str(src)
+                    if s.endswith(("/.", os.sep + ".")):
+                        base = Path(s[:-2])
+                        for child in sorted(base.iterdir()):
+                            tf.add(child, arcname=child.name)
+                    else:
+                        p = Path(s)
+                        tf.add(p, arcname=p.name)
+            subprocess.run(["zstd", "-q", "-f", str(raw), "-o", str(target)],
+                           check=True)
+            raw.unlink(missing_ok=True)
+            return target
         raise ArchiveError(f"Could not create {target.name}: {exc}") from exc
     return target
 
