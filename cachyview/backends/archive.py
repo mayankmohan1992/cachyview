@@ -263,8 +263,22 @@ def _list_with_zipfile(path: Path) -> ArchiveInfo:
     return info
 
 
+_TAR_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
+                 ".tar.xz", ".txz", ".tar.zst", ".tzst")
+
+
 def _is_tar(path: Path) -> bool:
-    """True for tar archives, including gz/bz2/xz/zst-compressed ones."""
+    """True for tar archives, including gz/bz2/xz/zst-compressed ones.
+
+    Detection is by extension first: ``tarfile.is_tarfile`` probes the
+    compression stream and, for zst, only succeeds when the ``zstandard``
+    module is importable — which is not guaranteed at probe time.  Routing
+    the whole tar family to Python's ``tarfile`` (which reads through the
+    compression) avoids 7z mis-reporting a compressed tar as opaque.
+    """
+    name = path.name.lower()
+    if any(name.endswith(s) for s in _TAR_SUFFIXES):
+        return True
     import tarfile
     try:
         return tarfile.is_tarfile(path)

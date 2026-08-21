@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["PyQt6", "Pillow"]
 
 [project.optional-dependencies]
-pdf = ["PyMuPDF", "pikepdf", "img2pdf"]
+pdf = ["PyMuPDF", "pikepdf", "img2pdf", "numpy"]
 dev = ["pytest"]
 
 [project.scripts]
