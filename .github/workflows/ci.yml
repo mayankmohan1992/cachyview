@@ -22,9 +22,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            python3-pyqt6 libgl1 libegl1 libglib2.0-0 \
+            python3-pyqt6 libgl1 libegl1 libglib2.0-0 xvfb \
             ghostscript qpdf poppler-utils tesseract-ocr \
-            7zip p7zip-full unrar poppler-utils
+            7zip p7zip-full unrar
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -39,6 +39,4 @@ jobs:
           python -m pip install ocrmypdf img2pdf
 
       - name: Run tests
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: pytest -q
+        run: xvfb-run -a pytest -q
