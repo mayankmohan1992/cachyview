@@ -39,7 +39,7 @@ jobs:
           python -m pip install ocrmypdf img2pdf zstandard lz4
 
       - name: Lint
-        run: python -m ruff check cachyview
+        run: ruff check cachyview
 
       - name: Run tests
         run: xvfb-run -a pytest -q
@@ -62,7 +62,7 @@ jobs:
             appstream desktop-file-utils xorg-server-xvfb
 
       - name: Lint
-        run: python -m ruff check cachyview
+        run: ruff check cachyview
 
       - name: Run tests
         run: xvfb-run -a python -m pytest -q
