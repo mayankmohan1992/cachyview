@@ -6,7 +6,7 @@ All notable changes are documented here. This project adheres to
 Release notes for each version are also generated automatically on the
 [GitHub Releases page](https://github.com/mayankmohan1992/cachyview/releases).
 
-## [Unreleased]
+## [0.3.0] - 2026-09-21
 
 ### Fixed
 - PDF **redaction** now affects only the page the mark was drawn on (it used
