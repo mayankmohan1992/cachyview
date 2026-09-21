@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cachyview"
-version = "0.3.1"
+version = "0.3.2"
 description = "Fast native archive, PDF, image and text toolkit for Linux"
 requires-python = ">=3.11"
 dependencies = ["PyQt6", "Pillow"]
 
 [project.optional-dependencies]
-pdf = ["PyMuPDF", "pikepdf", "img2pdf", "numpy"]
+pdf = ["PyMuPDF", "pikepdf", "img2pdf"]
 formats = ["pillow-heif", "pillow-avif-plugin", "pillow-jxl-plugin", "rawpy", "lz4", "pyyaml"]
 dev = ["pytest", "ruff", "pyyaml"]
 

@@ -6,6 +6,14 @@ All notable changes are documented here. This project adheres to
 Release notes for each version are also generated automatically on the
 [GitHub Releases page](https://github.com/mayankmohan1992/cachyview/releases).
 
+## [0.3.2] - 2026-09-21
+
+### Fixed
+- **PDF compare no longer needs `numpy`.** `backends.pdf.diff_pages` now builds
+  its difference mask with Pillow (`ImageChops`), so the feature works in the
+  portable bundle (which does not ship numpy) and drops a heavy dependency from
+  the Arch package too.
+
 ## [0.3.1] - 2026-09-21
 
 ### Fixed

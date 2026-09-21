@@ -1530,8 +1530,7 @@ def diff_pages(a: str | os.PathLike, b: str | os.PathLike, *,
     report: list[dict] = []
     try:
         import io
-        import numpy as np
-        from PIL import Image
+        from PIL import Image, ImageChops
         common = min(da.page_count, db.page_count)
         for i in range(common):
             pa = da[i]
@@ -1542,19 +1541,19 @@ def diff_pages(a: str | os.PathLike, b: str | os.PathLike, *,
             ib = Image.frombytes("RGB", (rb.width, rb.height), rb.samples)
             if ia.size != ib.size:
                 ib = ib.resize(ia.size)
-            arr_a = np.asarray(ia, dtype=np.int16)
-            arr_b = np.asarray(ib, dtype=np.int16)
-            diff = np.abs(arr_a - arr_b)
-            mask = (diff > 24).any(axis=2)
-            change = int(mask.sum())
+            # Per-channel absolute difference, thresholded, then collapsed to a
+            # black/white mask — all in Pillow, so no numpy dependency.
+            diff = ImageChops.difference(ia, ib)
+            mask = diff.point(lambda v: 255 if v > 24 else 0).convert("L")
+            mask = mask.point(lambda v: 255 if v else 0)
+            change = mask.histogram()[255]
             total = ia.width * ia.height
             pct = (change / total) * 100 if total else 0.0
             changed = change > 0
             diff_image = None
             if changed:
-                arr = np.zeros((ia.height, ia.width, 3), dtype=np.uint8)
-                arr[mask] = (220, 30, 30)
-                out = Image.fromarray(arr, "RGB")
+                out = Image.new("RGB", ia.size, (0, 0, 0))
+                out.paste((220, 30, 30), mask=mask)
                 buf = io.BytesIO()
                 out.save(buf, "PNG")
                 diff_image = buf.getvalue()

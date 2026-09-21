@@ -2,7 +2,7 @@
 # Contributors welcome — see https://github.com/mayankmohan1992/cachyview/CONTRIBUTING.md
 
 pkgname=cachyview
-pkgver=0.3.1
+pkgver=0.3.2
 pkgrel=1
 pkgdesc="Fast native archive, PDF, image and text toolkit for Linux — the offline, privacy-first alternative to macOS Preview."
 arch=('x86_64' 'aarch64')
@@ -20,7 +20,6 @@ depends=(
 optdepends=(
   'python-pygments: syntax highlighting in the text viewer'
   'python-img2pdf: lossless image-to-PDF embedding'
-  'python-numpy: faster PDF page comparison'
   '7zip: 7z/zip/rar archive extraction (required for most archives)'
   'unrar: RAR5 and encrypted RAR archives'
   'libvips: fast image scaling and conversion'
