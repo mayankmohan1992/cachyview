@@ -56,10 +56,10 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
             python python-pyqt6 qt6-svg python-pillow python-pymupdf \
-            python-pikepdf python-zstandard python-pygments python-img2pdf \
+            python-pikepdf python-zstandard python-pygments img2pdf \
             python-numpy python-pytest python-yaml python-lz4 ruff \
             ghostscript qpdf poppler tesseract 7zip unrar \
-            appstream desktop-file-utils xvfb
+            appstream desktop-file-utils xorg-server-xvfb
 
       - name: Lint
         run: python -m ruff check cachyview
