@@ -7,6 +7,17 @@ pain points, mapped to whether CachyView can address them today.
 
 Legend: ✅ already done · 🔜 in progress (the 3 agreed QOL items) · ❌ not done
 
+> **Status update:** Most Tier-1 items have since landed — persistent
+> annotations, flatten, true redaction, signature stamp, page compare,
+> insert/append pages, full outline CRUD, auto-scroll presentation, recent/
+> pinned files, archive flat view/search/drag-out, async archive listing,
+> persisted image edit history, levels/curves, red-eye removal, lossless JPEG
+> rotate, batch queue, in-place organiser, session restore, command palette
+> and KDE theming. Also added: PDF→DOCX, PDF/A, AppStream metadata and a
+> `--set-default` command. Still open: PKCS#12 (cryptographic) signing,
+> in-place page-text editing, background removal, duplicate finder and
+> screenshot capture. See `docs/PLAN.md` §6 for the authoritative status.
+
 ## A. PDF — biggest gap is a real editor, not a toolbox
 
 1. **Annotations that persist in the file** — highlight, underline, sticky

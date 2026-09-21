@@ -1,5 +1,9 @@
 """Archive backend tests against real archives built by the real tools."""
+import importlib.util
+import io
 import subprocess
+import sys
+import tarfile
 import zipfile
 
 import pytest
@@ -11,6 +15,27 @@ HAVE_7Z = ar._sevenzip() is not None
 HAVE_RAR = ar._tool("unrar") is not None
 
 
+@pytest.mark.skipif(not HAVE_7Z, reason="7z not installed")
+@pytest.mark.parametrize("name", [
+    "x.rar", "x.gz", "x.bz2", "x.xz", "x.zst", "x.lz4", "x.iso", "x.rpm",
+    "x.tar.gz", "x.cbz",
+])
+def test_can_mutate_false_for_read_only(tmp_path, name):
+    assert ar.can_mutate(tmp_path / name) is False
+
+
+@pytest.mark.skipif(not HAVE_7Z, reason="7z not installed")
+@pytest.mark.parametrize("name", ["x.7z", "x.zip"])
+def test_can_mutate_true_for_writable(tmp_path, name):
+    assert ar.can_mutate(tmp_path / name) is True
+
+
+@pytest.mark.skipif(not HAVE_7Z, reason="7z not installed")
+@pytest.mark.parametrize("name", ["x.tar", "x.tgz", "x.tar.zst"])
+def test_can_mutate_false_for_tar_family(tmp_path, name):
+    assert ar.can_mutate(tmp_path / name) is False
+
+
 @pytest.fixture
 def tree(tmp_path):
     """A small directory tree to archive."""
@@ -20,6 +45,50 @@ def tree(tmp_path):
     (src / "sub" / "nested.txt").write_text("nested content\n")
     (src / "data.bin").write_bytes(bytes(range(256)) * 8)
     return src
+
+
+HAVE_LZ4 = importlib.util.find_spec("lz4.frame") is not None
+
+
+@pytest.mark.skipif(not HAVE_LZ4, reason="needs python-lz4")
+def test_single_lz4_roundtrip(tmp_path):
+    import lz4.frame
+    payload = b"cachyview lz4 payload" * 100
+    src = tmp_path / "notes.txt.lz4"
+    src.write_bytes(lz4.frame.compress(payload))
+    info = ar.list_archive(src)
+    assert info.format == "lz4"
+    assert [e.name for e in info.entries] == ["notes.txt"]
+    out = tmp_path / "out"
+    written = ar.extract(src, out)
+    assert written[0].read_bytes() == payload
+
+
+@pytest.mark.skipif(not HAVE_LZ4, reason="needs python-lz4")
+def test_tar_lz4_roundtrip(tmp_path, tree):
+    import io
+    import lz4.frame
+    import tarfile
+    tar_bytes = io.BytesIO()
+    with tarfile.open(fileobj=tar_bytes, mode="w") as tf:
+        tf.add(tree / "hello.txt", arcname="hello.txt")
+        tf.add(tree / "sub", arcname="sub")
+    src = tmp_path / "a.tar.lz4"
+    src.write_bytes(lz4.frame.compress(tar_bytes.getvalue()))
+    info = ar.list_archive(src)
+    names = {e.name for e in info.entries if not e.is_dir}
+    assert {"hello.txt", "sub/nested.txt"} <= names
+    out = tmp_path / "out"
+    ar.extract(src, out)
+    assert (out / "hello.txt").read_text() == "hello world\n"
+
+
+def test_single_lz4_missing_module_hint(tmp_path, monkeypatch):
+    src = tmp_path / "a.lz4"
+    src.write_bytes(b"not lz4")
+    monkeypatch.setitem(sys.modules, "lz4", None)
+    with pytest.raises(ar.ArchiveError, match="python-lz4"):
+        ar._lz4_decompress(src)
 
 
 def _mkzip(path, tree, password=None):
@@ -46,6 +115,29 @@ def test_create_then_list_roundtrip(tmp_path, tree, fmt):
     assert "sub/nested.txt" in names
     assert info.file_count == 3
     assert info.total_size == 12 + 15 + 2048
+
+
+@pytest.mark.parametrize("fmt", ["tar.gz", "tar.bz2", "tar.xz"])
+def test_create_tar_honours_level(tmp_path, tree, fmt):
+    """A compression level must be accepted for every compressed tar."""
+    out = tmp_path / f"a.{fmt}"
+    ar.create(out, [str(tree) + "/."], fmt=fmt, level=1)
+    assert out.is_file() and out.stat().st_size > 0
+    assert ar.list_archive(out).file_count == 3
+
+
+def test_zip_comment_reported(tmp_path, tree):
+    out = tmp_path / "c.zip"
+    with zipfile.ZipFile(out, "w") as zf:
+        zf.writestr("a.txt", "hi")
+        zf.comment = b"hello comment"
+    assert ar.list_archive(out).comment == "hello comment"
+
+
+def test_comment_from_7z_banner():
+    text = "Path = a.zip\nType = zip\nComment = hi there\n----------\n"
+    assert ar._comment_from_7z(text) == "hi there"
+    assert ar._comment_from_7z("Path = a.zip\nType = zip\n") == ""
 
 
 @pytest.mark.skipif(not HAVE_7Z, reason="needs 7zip")
@@ -239,6 +331,66 @@ def test_bomb_total_size_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(ar.Path, "stat", lambda self: type("S", (), {"st_size": 2**30})())
     with pytest.raises(ar.ArchiveBomb):
         ar.check_bomb(fake)
+
+
+def test_bomb_entry_count_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(ar, "MAX_ENTRIES", 2)
+    fake = ar.ArchiveInfo(
+        path=tmp_path, entries=[ar.Entry(f"f{i}", size=1) for i in range(3)])
+    with pytest.raises(ar.ArchiveBomb, match="entries"):
+        ar.check_bomb(fake)
+
+
+def test_harvest_drops_symlinks(tmp_path):
+    """A symlink produced by an external extractor must never reach the user."""
+    staging = tmp_path / "stage"
+    staging.mkdir()
+    (staging / "real.txt").write_text("hi")
+    (staging / "evil").symlink_to("/etc/passwd")
+    out = tmp_path / "out"
+    out.mkdir()
+    written = ar._harvest_staging(staging, out)
+    assert (out / "real.txt").read_text() == "hi"
+    assert not (out / "evil").exists()
+    assert [p.name for p in written] == ["real.txt"]
+
+
+def test_extract_honours_cancellation(tmp_path, tree):
+    from cachyview.core.jobs import JobCancelled
+    src = tmp_path / "a.tar"
+    with tarfile.open(src, "w") as tf:
+        tf.add(tree / "hello.txt", arcname="hello.txt")
+
+    class Ctx:
+        cancelled = True
+
+        def check(self):
+            raise JobCancelled()
+
+        def progress(self, *_a):
+            pass
+
+    with pytest.raises(JobCancelled):
+        ar.extract(src, tmp_path / "o", ctx=Ctx())
+
+
+def test_tar_symlink_member_is_not_extracted(tmp_path):
+    """A tar symlink pointing outside must be ignored, not materialised."""
+    src = tmp_path / "link.tar"
+    with tarfile.open(src, "w") as tf:
+        link = tarfile.TarInfo("evil")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/etc/passwd"
+        tf.addfile(link)
+        data = b"hello"
+        member = tarfile.TarInfo("ok.txt")
+        member.size = len(data)
+        tf.addfile(member, io.BytesIO(data))
+    out = tmp_path / "out"
+    written = ar.extract(src, out)
+    assert (out / "ok.txt").read_text() == "hello"
+    assert not (out / "evil").exists()
+    assert [p.name for p in written] == ["ok.txt"]
 
 
 # --- integrity ------------------------------------------------------------

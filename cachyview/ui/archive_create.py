@@ -21,7 +21,8 @@ class CreateArchiveDialog(QDialog):
         add_dir = QPushButton("Add folder…", self)
         add_dir.clicked.connect(self._add_dir)
         self.fmt = QComboBox(self)
-        self.fmt.addItems(["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.zst"])
+        self.fmt.addItems(["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2",
+                           "tar.zst"])
         self.level = QSpinBox(self)
         self.level.setRange(0, 9)
         self.level.setValue(5)

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import (QColor, QFont, QFontDatabase, QPainter, QTextCursor,
+from PyQt6.QtGui import (QColor, QFontDatabase, QPainter, QTextCursor,
                          QTextFormat)
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QInputDialog,
                              QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
@@ -23,7 +23,7 @@ class _LineNumberArea(QWidget):
     def sizeHint(self) -> QSize:
         return QSize(self._editor.line_number_width(), 0)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
+    def paintEvent(self, event) -> None:
         self._editor.paint_line_numbers(event)
 
 
@@ -59,7 +59,7 @@ class CodeEditor(QPlainTextEdit):
         if rect.contains(self.viewport().rect()):
             self._update_margins()
 
-    def resizeEvent(self, event) -> None:  # noqa: N802
+    def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         cr = self.contentsRect()
         self._gutter.setGeometry(QRect(cr.left(), cr.top(),
@@ -168,6 +168,9 @@ class TextTab(QWidget):
         add_action(bar, "edit-compress", "Minify JSON",
                    lambda: self.reformat("json", minify=True))
         add_action(bar, "text-xml", "Format XML", lambda: self.reformat("xml"))
+        add_action(bar, "format-text-strikethrough", "Format YAML",
+                   lambda: self.reformat("yaml"))
+        add_action(bar, "tools-check-spelling", "Validate", self.validate_doc)
         add_action(bar, "view-preview", "Markdown preview", self.toggle_markdown)
         add_action(bar, "view-form-table", "CSV table", self.toggle_csv)
         self.enc = QComboBox(self)
@@ -310,6 +313,21 @@ class TextTab(QWidget):
         cursor.select(QTextCursor.SelectionType.Document)
         cursor.insertText(pretty)
         cursor.endEditBlock()
+
+    def validate_doc(self) -> None:
+        """Check JSON/XML/TOML/YAML well-formedness for the current text."""
+        fmt = {".json": "json", ".xml": "xml", ".toml": "toml",
+               ".yaml": "yaml", ".yml": "yaml"}.get(self.path.suffix.lower())
+        if not fmt:
+            QMessageBox.information(
+                self, "Validate", "No validator for this file type.")
+            return
+        try:
+            text_backend.validate(self.editor.toPlainText(), fmt)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid", f"{fmt.upper()}: {exc}")
+            return
+        QMessageBox.information(self, "Valid", f"{fmt.upper()} is well-formed.")
 
     def is_modified(self) -> bool:
         return self.editor.document().isModified()

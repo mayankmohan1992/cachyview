@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 
+from .safe import write_text_atomic
+
 MAX_RECENTS = 25
 
 
@@ -36,7 +38,7 @@ def load() -> dict:
 
 
 def save(state: dict) -> None:
-    _recents_path().write_text(json.dumps(state, indent=2), encoding="utf-8")
+    write_text_atomic(_recents_path(), json.dumps(state, indent=2))
 
 
 def remember(path: str | Path) -> dict:

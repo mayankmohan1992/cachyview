@@ -9,14 +9,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                              QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-                             QListWidget, QListWidgetItem, QProgressBar,
-                             QPushButton, QTableWidget, QTableWidgetItem,
-                             QVBoxLayout, QWidget)
+                             QLineEdit, QListWidget, QListWidgetItem,
+                             QProgressBar, QPushButton, QTableWidget,
+                             QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..backends import batch as b
-from ..core.jobs import JobCancelled
 
 
 OPERATIONS = [
@@ -61,6 +60,11 @@ class BatchPanel(QWidget):
         self.out_dir = QLabel("Output: next to each file", self)
         out_btn = QPushButton("Choose output folder…", self)
         out_btn.clicked.connect(self._choose_out)
+        self.rename = QLineEdit(self)
+        self.rename.setPlaceholderText(
+            "Rename pattern (optional): {name}_edited{ext}, photo_{n}{ext}…")
+        self.keep_exif = QCheckBox("Keep EXIF metadata", self)
+        self.keep_exif.setChecked(True)
 
         self.table = QTableWidget(0, 3, self)
         self.table.setHorizontalHeaderLabels(["File", "Status", "Detail"])
@@ -94,6 +98,8 @@ class BatchPanel(QWidget):
 
         layout.addWidget(self.out_dir)
         layout.addWidget(out_btn)
+        layout.addWidget(self.rename)
+        layout.addWidget(self.keep_exif)
         layout.addWidget(self.table)
         layout.addWidget(self.progress)
         end_row = QHBoxLayout()
@@ -135,6 +141,8 @@ class BatchPanel(QWidget):
             return None
         job = b.BatchJob("Batch", ops)
         job.output_dir = getattr(self, "_out_dir", None)
+        job.rename_pattern = self.rename.text().strip() or None
+        job.keep_exif = self.keep_exif.isChecked()
         for i in range(self.files.count()):
             job.add_file(self.files.item(i).text())
         return job

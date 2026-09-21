@@ -80,7 +80,7 @@ def _run_in_place(tab, label: str, fn: Callable) -> None:
     return job
 
 
-def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
+def run_tool(tab, name: str) -> None:
     """Execute the named tool against ``tab.path``."""
     src: Path = tab.path
     pw = tab.password
@@ -217,12 +217,21 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
                  lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
 
     elif name == "Watermark":
-        text, ok = QInputDialog.getText(tab, "Watermark", "Watermark text:")
-        if not ok or not text.strip():
+        from .image_resize import WatermarkDialog
+        dialog = WatermarkDialog(tab)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        if not values.get("text") and not values.get("image"):
             return
         out = output_path(src, "watermarked")
         _run_job(tab, "Adding watermark",
-                 lambda ctx: pb.watermark(src, out, text=text.strip(), password=pw),
+                 lambda ctx: pb.watermark(
+                     src, out, text=values.get("text"),
+                     image=values.get("image"),
+                     opacity=values.get("opacity", 0.15),
+                     size=values.get("size", 48),
+                     scale=values.get("scale", 0.4), password=pw),
                  lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
 
     elif name == "Page numbers":
@@ -321,23 +330,91 @@ def run_tool(tab, name: str) -> None:      # noqa: C901 - a dispatch table
                  lambda ctx: pb.repair(src, out, password=pw),
                  lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
 
+    elif name == "N-up…":
+        per, ok = QInputDialog.getItem(
+            tab, "N-up", "Pages per sheet:", ["2", "4", "6", "9"], 0, False)
+        if not ok:
+            return
+        out = output_path(src, f"nup-{per}")
+        _run_job(tab, "Building N-up",
+                 lambda ctx: pb.nup(src, out, per_sheet=int(per), password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Booklet…":
+        out = output_path(src, "booklet")
+        _run_job(tab, "Building booklet",
+                 lambda ctx: pb.booklet(src, out, password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Linearize":
+        out = output_path(src, "linearized")
+        _run_job(tab, "Linearizing",
+                 lambda ctx: pb.linearize(src, out, password=pw),
+                 lambda r: _done_message(tab, r))
+
+    elif name == "To HTML":
+        out = output_path(src, "html", ".html")
+        _run_job(tab, "Exporting HTML",
+                 lambda ctx: pb.to_html(src, out, password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "To Word (.docx)":
+        dest = QFileDialog.getExistingDirectory(
+            tab, "Save Word document to", str(src.parent))
+        if not dest:
+            return
+        _run_job(tab, "Converting to Word",
+                 lambda ctx: pb.to_docx(src, dest, password=pw, ctx=ctx),
+                 lambda r: _done_message(tab, r))
+
+    elif name == "To PDF/A":
+        level, ok = QInputDialog.getItem(
+            tab, "PDF/A", "Conformance level:",
+            ["PDF/A-1", "PDF/A-2", "PDF/A-3"], 1, False)
+        if not ok:
+            return
+        out = output_path(src, f"pdfa-{level[-1]}")
+        _run_job(tab, "Converting to PDF/A",
+                 lambda ctx: pb.to_pdfa(src, out, level=int(level[-1]),
+                                        password=pw),
+                 lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
+
+    elif name == "Text / Markdown to PDF…":
+        files, _ = QFileDialog.getOpenFileNames(
+            tab, "Select text/Markdown files", str(src.parent),
+            "Text (*.txt *.md *.markdown)")
+        if not files:
+            return
+        dest = QFileDialog.getExistingDirectory(
+            tab, "Save PDFs to", str(src.parent))
+        if not dest:
+            return
+
+        def _typeset(_ctx):
+            made = []
+            for f in files:
+                target = Path(dest) / (Path(f).stem + ".pdf")
+                made.append(pb.text_to_pdf(f, target))
+            return made
+
+        _run_job(tab, "Typesetting", _typeset,
+                 lambda made: QMessageBox.information(
+                     tab, "Finished", f"Wrote {len(made)} PDF(s) to:\n{dest}"))
+
     elif name == "Metadata":
         current = tab.info.metadata if tab.info else {}
-        title, ok = QInputDialog.getText(
-            tab, "Metadata", "Title:", QLineEdit.EchoMode.Normal,
-            current.get("title", ""))
-        if not ok:
-            return
-        author, ok = QInputDialog.getText(
-            tab, "Metadata", "Author:", QLineEdit.EchoMode.Normal,
-            current.get("author", ""))
-        if not ok:
-            return
+        values = {}
+        for key, label in (("title", "Title"), ("author", "Author"),
+                           ("subject", "Subject"), ("keywords", "Keywords")):
+            text, ok = QInputDialog.getText(
+                tab, "Metadata", f"{label}:", QLineEdit.EchoMode.Normal,
+                current.get(key, ""))
+            if not ok:
+                return
+            values[key] = text
         out = output_path(src, "metadata")
         _run_job(tab, "Writing metadata",
-                 lambda ctx: pb.set_metadata(src, out,
-                                             {"title": title, "author": author},
-                                             password=pw),
+                 lambda ctx: pb.set_metadata(src, out, values, password=pw),
                  lambda r: (_done_message(tab, r), tab.open_request.emit(str(r))))
 
     elif name == "Sign / Stamp":

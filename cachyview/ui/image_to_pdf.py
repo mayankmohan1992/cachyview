@@ -6,6 +6,7 @@ page order in the output PDF, so arranging is the whole point.
 """
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, Qt
@@ -30,6 +31,10 @@ class ImageToPdfDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Images to PDF")
         self.resize(820, 600)
+        # Rotations are written to private temp copies so the user's originals
+        # are never modified; the directory is purged when the dialog closes.
+        self._tmp = tempfile.TemporaryDirectory(prefix="cachyview-imgpdf-")
+        self._rot_n = 0
 
         self.grid = QListWidget(self)
         self.grid.setViewMode(QListView.ViewMode.IconMode)
@@ -126,8 +131,15 @@ class ImageToPdfDialog(QDialog):
 
     def _rotate(self, angle: int) -> None:
         for item in self._selected() or [self.grid.item(self.grid.count() - 1)]:
+            if item is None:
+                continue
             p = Path(item.data(PATH_ROLE))
-            rotated = ib.lossless_rotate(p, p, angle=angle)
+            self._rot_n += 1
+            dest = Path(self._tmp.name) / f"rot{self._rot_n}-{p.name}"
+            try:
+                rotated = ib.lossless_rotate(p, dest, angle=angle)
+            except ib.ImageError:
+                continue
             item.setData(PATH_ROLE, str(rotated))
             self._paint(item)
 
@@ -162,3 +174,8 @@ class ImageToPdfDialog(QDialog):
             QMessageBox.critical(self, "Images to PDF", str(exc))
             return
         self.accept()
+
+    def done(self, result: int) -> None:
+        # Temp rotated copies are no longer needed once the PDF is written.
+        self._tmp.cleanup()
+        super().done(result)

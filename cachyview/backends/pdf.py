@@ -76,6 +76,11 @@ class PdfInfo:
 
 def _fitz():
     try:
+        import pymupdf
+        return pymupdf
+    except ImportError:
+        pass
+    try:
         import fitz
         return fitz
     except ImportError as exc:      # pragma: no cover - dependency is installed
@@ -211,6 +216,35 @@ def page_words(path: str | os.PathLike, page: int,
         words = doc[page - 1].get_text("words") or []
         return [(float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4]))
                 for w in words]
+    finally:
+        doc.close()
+
+
+def links(path: str | os.PathLike, page: int,
+          password: str | None = None) -> list[dict]:
+    """Links on a 1-based *page*.
+
+    Returns ``{"kind": "uri"|"page", "uri": str, "page": int, "rect": xyxy}``.
+    Only external URIs and internal jumps are reported; launch/named actions
+    are deliberately ignored so nothing can execute.
+    """
+    fitz = _fitz()
+    doc = open_doc(path, password)
+    try:
+        if not 1 <= page <= doc.page_count:
+            return []
+        out: list[dict] = []
+        for link in doc[page - 1].get_links():
+            rect = tuple(float(v) for v in link.get("from", (0, 0, 0, 0)))
+            kind = link.get("kind")
+            if kind == fitz.LINK_URI:
+                out.append({"kind": "uri", "uri": link.get("uri", ""),
+                            "page": page, "rect": rect})
+            elif kind == fitz.LINK_GOTO:
+                out.append({"kind": "page", "uri": "",
+                            "page": int(link.get("page", 0)) + 1,
+                            "rect": rect})
+        return out
     finally:
         doc.close()
 
@@ -559,7 +593,7 @@ def _color_array(color: tuple[float, float, float]):
     return Array([float(c) for c in color])
 
 
-def _quad_points(rect) -> "Array":
+def _quad_points(rect):
     """QuadPoints covering the rectangle (4 corners, y flipped for PDF)."""
     from pikepdf import Array
     x0, y0, x1, y1 = rect
@@ -573,7 +607,7 @@ def list_annotations(path: str | os.PathLike,
     """Read the annotations currently in the document (for the UI to show)."""
     pikepdf = _pikepdf()
     out: list[Annotation] = []
-    with pikepdf.open(src := Path(path), password=password or "") as doc:
+    with pikepdf.open(Path(path), password=password or "") as doc:
         for i, page in enumerate(doc.pages):
             fors = page.get("/Annots")
             if not fors:
@@ -691,7 +725,6 @@ def flatten(path: str | os.PathLike, dest: str | os.PathLike,
     draft.  Uses PyMuPDF's in-place flatten, which is lossless for the
     underlying page text.
     """
-    fitz = _fitz()
     doc = open_doc(path, password)
     try:
         if hasattr(doc, "bake"):
@@ -708,7 +741,7 @@ def flatten(path: str | os.PathLike, dest: str | os.PathLike,
 
 def redact(path: str | os.PathLike, dest: str | os.PathLike,
            rects: list[tuple[float, float, float, float]],
-           *, password: str | None = None,
+           *, page: int | None = None, password: str | None = None,
            fill: tuple[int, int, int] = (0, 0, 0)) -> Path:
     """Permanently remove content under *rects* (true redaction).
 
@@ -716,17 +749,25 @@ def redact(path: str | os.PathLike, dest: str | os.PathLike,
     underneath and then paints the rectangle with *fill*, so the data cannot be
     recovered by copying text or removing an overlay.  This is irreversible —
     the caller must have confirmed with the user first.
+
+    *page* is 1-based and restricts the redaction to that single page.  When
+    omitted, each rect is applied to every page whose box intersects it (kept
+    for callers that redact an orientation-independent region).
     """
     fitz = _fitz()
     doc = open_doc(path, password)
     try:
+        if page is not None:
+            targets = [doc[page - 1]]
+        else:
+            targets = list(doc)
         for rect in rects:
             r = fitz.Rect(*rect)
-            for page in doc:
-                if page.rect.intersects(r):
-                    page.add_redact_annot(r, fill=fill)
-        for page in doc:
-            page.apply_redactions()
+            for target in targets:
+                if page is not None or target.rect.intersects(r):
+                    target.add_redact_annot(r, fill=fill)
+        for target in targets:
+            target.apply_redactions()
         doc.save(str(dest), garbage=3, deflate=True, clean=True)
     finally:
         doc.close()
@@ -788,11 +829,16 @@ def insert_pages(src: str | os.PathLike, dest: str | os.PathLike,
         img = ib.load(insert_path)
         raster = _rasterised_pdf(img)  # a single-page PDF on disk
         fitz = _fitz()
-        with fitz.open(src) as doc:
-            with fitz.open(raster) as extra:
-                doc.insert_pdf(extra)
-            doc.save(dest, encryption=False)
-        Path(raster).unlink(missing_ok=True)
+        try:
+            with fitz.open(src) as doc:
+                if password:
+                    doc.authenticate(password)
+                with fitz.open(raster) as extra:
+                    start_at = max(0, min(after, doc.page_count))
+                    doc.insert_pdf(extra, start_at=start_at)
+                doc.save(dest, encryption=False)
+        finally:
+            Path(raster).unlink(missing_ok=True)
     return Path(dest)
 
 
@@ -856,7 +902,6 @@ def stamp(src: str | os.PathLike, dest: str | os.PathLike, *,
 def get_outline(path: str | os.PathLike,
                 password: str | None = None) -> list[dict]:
     """Return the document outline as a list of ``{title, page, level}`` dicts."""
-    fitz = _fitz()
     doc = open_doc(path, password)
     try:
         toc = doc.get_toc(simple=True)
@@ -869,21 +914,44 @@ def set_outline(path: str | os.PathLike, dest: str | os.PathLike,
                 entries: list[dict], *, password: str | None = None) -> Path:
     """Replace the whole document outline.
 
-    *entries* is a list of ``{"title": str, "page": int, "level": int}`` dicts
-    (1-based page, 0-based or 1-based level both accepted).
+    *entries* is a list of ``{"title": str, "page": int, "level": int}`` dicts.
+    Levels may be 0-based or 1-based: they are shifted so the shallowest entry
+    becomes level 1, which makes a ``get_outline`` result round-trip exactly.
     """
-    fitz = _fitz()
     doc = open_doc(path, password)
+    tmp: Path | None = None
     try:
-        toc = [(max(1, int(e.get("level", 0)) + 1),
-                str(e.get("title", "")),
-                max(1, int(e.get("page", 1)))) for e in entries]
-        doc.set_toc(toc)
+        # PDF outlines are 1-based and must start at level 1; a level may not
+        # jump by more than one from the previous entry.  Normalise so an
+        # otherwise-valid edit list can never raise a bare ValueError.
+        raw = [max(0, int(entry.get("level", 0))) for entry in entries]
+        base = min(raw) if raw else 0
+        toc: list[tuple[int, str, int]] = []
+        previous = 0
+        for entry, level in zip(entries, raw):
+            level = level - base + 1
+            if not toc:
+                level = 1
+            else:
+                level = max(1, min(level, previous + 1))
+            toc.append((level, str(entry.get("title", "")),
+                        max(1, int(entry.get("page", 1)))))
+            previous = level
+        try:
+            doc.set_toc(toc)
+        except ValueError as exc:
+            raise PdfError(f"Invalid bookmark structure: {exc}") from exc
         tmp = Path(dest).with_name(Path(dest).name + ".toc.tmp")
         doc.save(str(tmp), garbage=3, deflate=True, clean=True)
+    except BaseException:
+        # Never leave a half-written temporary behind, and never mask the real
+        # error with a NameError on an unbound ``tmp``.
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+        raise
     finally:
         doc.close()
-    if tmp.exists():
+    if tmp is not None and tmp.exists():
         os.replace(tmp, dest)
     return Path(dest)
 
@@ -1026,29 +1094,269 @@ def from_office(path: str | os.PathLike, dest_dir: str | os.PathLike,
     return target
 
 
+def to_docx(path: str | os.PathLike, dest_dir: str | os.PathLike, *,
+            password: str | None = None, ctx=None) -> Path:
+    """Convert a PDF to an editable Word document via LibreOffice.
+
+    Quality depends on LibreOffice's PDF import; scanned/image-only pages
+    yield an empty document, so OCR first for those.
+    """
+    soffice = _require("soffice", "libreoffice-fresh")
+    src = Path(path)
+    out_dir = Path(dest_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    work = src
+    temp: Path | None = None
+    if password:
+        import tempfile
+        fd, name = tempfile.mkstemp(suffix=".pdf", prefix="cachyview-")
+        os.close(fd)
+        temp = Path(name)
+        doc = open_doc(src, password)
+        try:
+            doc.save(str(temp))
+        finally:
+            doc.close()
+        work = temp
+
+    if ctx is not None:
+        ctx.progress(-1, f"Converting {src.name} to Word…")
+    try:
+        res = run_tool(
+            [soffice, "--headless", "--convert-to", "docx", "--outdir",
+             str(out_dir), str(work)], timeout=DEFAULT_TIMEOUT)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+    target = out_dir / (src.stem + ".docx")
+    if not target.is_file():
+        raise PdfError(f"Conversion failed: {res.stderr.strip()[:300]}")
+    return target
+
+
 # --------------------------------------------------------------------------
 # content operations (PyMuPDF)
 # --------------------------------------------------------------------------
 
-def watermark(path: str | os.PathLike, dest: str | os.PathLike, *,
-              text: str, opacity: float = 0.15, size: int = 48,
-              rotate: int = 45, password: str | None = None) -> Path:
-    """Stamp diagonal text across every page."""
+def linearize(path: str | os.PathLike, dest: str | os.PathLike, *,
+              password: str | None = None) -> Path:
+    """Rewrite the PDF for fast web viewing (linearized) via qpdf."""
+    qpdf = _require("qpdf", "qpdf")
+    cmd = [qpdf, "--linearize"]
+    if password:
+        cmd.append(f"--password={password}")
+    cmd += [str(path), str(dest)]
+    res = run_tool(cmd, timeout=DEFAULT_TIMEOUT)
+    if res.returncode not in (0, 3) or not Path(dest).is_file():
+        raise PdfError(f"Linearize failed: {res.stderr.strip()[:300]}")
+    return Path(dest)
+
+
+def to_pdfa(path: str | os.PathLike, dest: str | os.PathLike, *,
+            level: int = 2, password: str | None = None) -> Path:
+    """Convert to PDF/A (archival) via Ghostscript."""
+    if level not in (1, 2, 3):
+        raise PdfError("PDF/A level must be 1, 2 or 3.")
+    gs = _require("gs", "ghostscript")
+    src, out = Path(path), Path(dest)
+    cmd = [
+        gs, "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER",
+        "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.7",
+        f"-dPDFA={level}", "-dPDFACompatibilityPolicy=1",
+        "-sColorConversionStrategy=UseDeviceIndependentColor",
+        "-dProcessColorModel=/DeviceRGB",
+        f"-sOutputFile={out}",
+    ]
+    if password:
+        cmd.append(f"-sPDFPassword={password}")
+    cmd.append(str(src))
+    res = run_tool(cmd, timeout=DEFAULT_TIMEOUT)
+    if res.returncode != 0 or not out.is_file():
+        raise PdfError(f"PDF/A conversion failed: {res.stderr.strip()[:300]}")
+    return out
+
+
+_NUP_GRID = {2: (2, 1), 4: (2, 2), 6: (3, 2), 9: (3, 3)}
+
+
+def nup(path: str | os.PathLike, dest: str | os.PathLike, *,
+        per_sheet: int = 2, page_size: str = "A4",
+        password: str | None = None) -> Path:
+    """Place several source pages on each output sheet (N-up)."""
     fitz = _fitz()
-    if not text:
-        raise PdfError("Watermark text is empty.")
+    if per_sheet not in _NUP_GRID:
+        raise PdfError("N-up supports 2, 4, 6 or 9 pages per sheet.")
+    cols, rows = _NUP_GRID[per_sheet]
+    base = PAGE_SIZES.get(page_size.upper(), PAGE_SIZES["A4"])
+    # Two- and six-up read better in landscape.
+    sw, sh = (base[1], base[0]) if per_sheet in (2, 6) else base
+    src = open_doc(path, password)
+    out = fitz.open()
+    try:
+        cell_w, cell_h = sw / cols, sh / rows
+        for start in range(0, src.page_count, per_sheet):
+            sheet = out.new_page(width=sw, height=sh)
+            for i in range(per_sheet):
+                idx = start + i
+                if idx >= src.page_count:
+                    break
+                r, c = i % cols, i // cols
+                rect = fitz.Rect(r * cell_w, c * cell_h,
+                                 (r + 1) * cell_w, (c + 1) * cell_h)
+                sheet.show_pdf_page(rect, src, idx)
+        out.save(str(dest), garbage=3, deflate=True)
+    finally:
+        src.close()
+        out.close()
+    return Path(dest)
+
+
+def booklet(path: str | os.PathLike, dest: str | os.PathLike, *,
+            page_size: str = "A4", password: str | None = None) -> Path:
+    """Impose pages for printing as a folded booklet (2-up, saddle stitch)."""
+    fitz = _fitz()
+    src = open_doc(path, password)
+    out = fitz.open()
+    try:
+        n = src.page_count
+        padded = ((n + 3) // 4) * 4
+        base = PAGE_SIZES.get(page_size.upper(), PAGE_SIZES["A4"])
+        sw, sh = base[1], base[0]          # landscape sheet
+
+        def blank_ok(index: int) -> bool:
+            return 1 <= index <= n
+
+        for k in range(padded // 4):
+            for side in ("front", "back"):
+                sheet = out.new_page(width=sw, height=sh)
+                if side == "front":
+                    order = (padded - 2 * k, 1 + 2 * k)
+                else:
+                    order = (2 + 2 * k, padded - 1 - 2 * k)
+                for cell, page_no in enumerate(order):
+                    if not blank_ok(page_no):
+                        continue
+                    rect = fitz.Rect(cell * sw / 2, 0,
+                                     (cell + 1) * sw / 2, sh)
+                    sheet.show_pdf_page(rect, src, page_no - 1)
+        out.save(str(dest), garbage=3, deflate=True)
+    finally:
+        src.close()
+        out.close()
+    return Path(dest)
+
+
+def to_html(path: str | os.PathLike, dest: str | os.PathLike, *,
+            password: str | None = None) -> Path:
+    """Export the text layer of every page to a single HTML file."""
+    doc = open_doc(path, password)
+    try:
+        parts = ["<!doctype html><html><head><meta charset='utf-8'>",
+                 "<style>section{page-break-after:always}</style></head><body>"]
+        for i, page in enumerate(doc):
+            parts.append(f"<section data-page='{i + 1}'>")
+            parts.append(page.get_text("html"))
+            parts.append("</section>")
+        parts.append("</body></html>")
+    finally:
+        doc.close()
+    out = Path(dest)
+    out.write_text("".join(parts), encoding="utf-8")
+    return out
+
+
+def render_thumbnail(path: str | os.PathLike, dest: str | os.PathLike, *,
+                     size: int = 256, page: int = 1,
+                     password: str | None = None) -> Path:
+    """Render one page to a PNG thumbnail (used by the KDE thumbnailer)."""
+    fitz = _fitz()
+    doc = open_doc(path, password)
+    try:
+        n = min(max(1, page), doc.page_count)
+        pg = doc[n - 1]
+        scale = size / max(pg.rect.width, pg.rect.height, 1)
+        pix = pg.get_pixmap(matrix=fitz.Matrix(scale, scale))
+        pix.save(str(dest))
+    finally:
+        doc.close()
+    return Path(dest)
+
+
+_MD_MARKS = re.compile(r"(^#{1,6}\s+)|(\*\*|__|`)", re.MULTILINE)
+
+
+def text_to_pdf(path: str | os.PathLike, dest: str | os.PathLike, *,
+                fontsize: int = 11, password: str | None = None) -> Path:
+    """Typeset a plain-text or Markdown file into a simple PDF."""
+    src = Path(path)
+    try:
+        text = src.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise PdfError(f"Cannot read {src.name}: {exc}") from exc
+    if src.suffix.lower() in (".md", ".markdown"):
+        text = _MD_MARKS.sub("", text)
+
+    fitz = _fitz()
+    width, height, margin = 595, 842, 56
+    line_h = max(8.0, fontsize * 1.4)
+    max_lines = max(1, int((height - 2 * margin) // line_h))
+    lines = text.splitlines() or [""]
+    doc = fitz.open()
+    try:
+        for start in range(0, len(lines), max_lines):
+            page = doc.new_page(width=width, height=height)
+            block = "\n".join(lines[start:start + max_lines]) or " "
+            page.insert_textbox(
+                fitz.Rect(margin, margin, width - margin, height - margin),
+                block, fontsize=fontsize, fontname="helv")
+        doc.save(str(dest), garbage=3, deflate=True)
+    finally:
+        doc.close()
+    return Path(dest)
+
+
+def watermark(path: str | os.PathLike, dest: str | os.PathLike, *,
+              text: str | None = None, image: str | os.PathLike | None = None,
+              opacity: float = 0.15, size: int = 48,
+              rotate: int = 45, scale: float = 0.4,
+              password: str | None = None) -> Path:
+    """Stamp a diagonal text and/or centred image watermark on every page."""
+    fitz = _fitz()
+    if not text and not image:
+        raise PdfError("Watermark needs text or an image.")
+    img_stream = None
+    img_size = None
+    if image is not None:
+        from . import image as ib
+        mark = ib.load(image).convert("RGBA")
+        mark.putalpha(mark.getchannel("A").point(
+            lambda v: int(v * max(0.0, min(1.0, opacity)))))
+        buf = io.BytesIO()
+        mark.save(buf, "PNG")
+        img_stream = buf.getvalue()
+        img_size = mark.size
     doc = open_doc(path, password)
     try:
         for page in doc:
             rect = page.rect
-            tw = fitz.TextWriter(rect, opacity=opacity)
-            font = fitz.Font("helv")
-            width = font.text_length(text, fontsize=size)
-            point = fitz.Point(max(0, (rect.width - width) / 2),
-                               rect.height / 2)
-            tw.append(point, text, font=font, fontsize=size)
-            tw.write_text(page, morph=(fitz.Point(rect.width / 2, rect.height / 2),
-                                       fitz.Matrix(rotate)))
+            if text:
+                tw = fitz.TextWriter(rect, opacity=opacity)
+                font = fitz.Font("helv")
+                width = font.text_length(text, fontsize=size)
+                point = fitz.Point(max(0, (rect.width - width) / 2),
+                                   rect.height / 2)
+                tw.append(point, text, font=font, fontsize=size)
+                tw.write_text(page, morph=(fitz.Point(rect.width / 2, rect.height / 2),
+                                           fitz.Matrix(rotate)))
+            if img_stream is not None and img_size is not None:
+                target_w = rect.width * max(0.05, min(2.0, scale))
+                target_h = img_size[1] * target_w / max(1, img_size[0])
+                x = (rect.width - target_w) / 2
+                y = (rect.height - target_h) / 2
+                page.insert_image(
+                    fitz.Rect(x, y, x + target_w, y + target_h),
+                    stream=img_stream, overlay=True)
         doc.save(str(dest), garbage=3, deflate=True)
     finally:
         doc.close()
@@ -1213,14 +1521,15 @@ def diff_pages(a: str | os.PathLike, b: str | os.PathLike, *,
 
     Returns ``{"pages": n, "identical": k, "report": [...]}`` where each
     report entry is ``{"page": int, "changed": bool, "diff_pct": float,
-    "diff_image": str|None}``.  *diff_image* is the path to a red-on-black PNG
-    highlighting changed pixels, or ``None`` when the page is unchanged.
+    "diff_image": bytes|None}``.  *diff_image* is in-memory PNG data of a
+    red-on-black image highlighting changed pixels, or ``None`` when the page
+    is unchanged.
     """
-    fitz = _fitz()
     da = open_doc(a, password_a)
     db = open_doc(b, password_b)
     report: list[dict] = []
     try:
+        import io
         import numpy as np
         from PIL import Image
         common = min(da.page_count, db.page_count)
@@ -1243,14 +1552,12 @@ def diff_pages(a: str | os.PathLike, b: str | os.PathLike, *,
             changed = change > 0
             diff_image = None
             if changed:
-                out = Image.new("RGB", ia.size, (0, 0, 0))
-                px = out.load()
-                ys, xs = mask.nonzero()
-                for y, x in zip(ys.tolist(), xs.tolist()):
-                    px[x, y] = (220, 30, 30)
-                tmp = Path(a).with_name(f".diff-{i+1}.png")
-                out.save(tmp)
-                diff_image = str(tmp)
+                arr = np.zeros((ia.height, ia.width, 3), dtype=np.uint8)
+                arr[mask] = (220, 30, 30)
+                out = Image.fromarray(arr, "RGB")
+                buf = io.BytesIO()
+                out.save(buf, "PNG")
+                diff_image = buf.getvalue()
             report.append({"page": i + 1, "changed": changed,
                            "diff_pct": round(pct, 2), "diff_image": diff_image})
         extra = abs(da.page_count - db.page_count)

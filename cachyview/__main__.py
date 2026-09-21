@@ -5,6 +5,11 @@ import argparse
 import sys
 
 
+def _version() -> str:
+    from . import __version__
+    return __version__
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cachyview",
@@ -20,6 +25,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="add the launcher and Dolphin right-click actions")
     parser.add_argument("--uninstall-integration", action="store_true",
                         help="remove the launcher and Dolphin actions")
+    parser.add_argument("--set-default", nargs="*", metavar="KIND",
+                        choices=["pdf", "images", "archives", "text", "all"],
+                        default=None,
+                        help="make CachyView the default app (pdf, images, "
+                             "archives, text or all)")
+    parser.add_argument("--version", action="version",
+                        version=f"CachyView {_version()}")
     args = parser.parse_args(argv)
 
     if args.check_deps:
@@ -53,11 +65,24 @@ def main(argv: list[str] | None = None) -> int:
             print("nothing to remove")
         return 0
 
+    if args.set_default is not None:
+        from .integration.desktop import install, set_default, status
+        if not status().get("desktop"):
+            install()
+        try:
+            mimes = set_default(args.set_default or ["all"])
+        except RuntimeError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f"CachyView is now the default handler for {len(mimes)} file types.")
+        return 0
+
     from PyQt6.QtWidgets import QApplication
     from .ui.main_window import MainWindow
     from .ui import theming
     from .core.single_instance import try_handoff, bind_handoff
     from .core import settings as prefs
+    from .integration.desktop import DESKTOP_ID
 
     if try_handoff(args.files):
         return 0
@@ -65,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("CachyView")
     app.setApplicationDisplayName("CachyView")
-    app.setDesktopFileName("cachyview")
+    app.setDesktopFileName(DESKTOP_ID)
     theming.apply_system_theme(app)
     window = MainWindow(args.files, peek=args.peek)
     def _on_handoff(paths: list[str]) -> None:

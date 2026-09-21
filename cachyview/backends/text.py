@@ -90,6 +90,16 @@ def pretty_print(text: str, fmt: str) -> str:
             return minidom.parseString(text).toprettyxml(indent="  ")
         except ExpatError as exc:
             raise ValueError(f"Invalid XML: {exc}") from exc
+    if fmt == "yaml":
+        try:
+            import yaml  # type: ignore
+        except ImportError as exc:
+            raise ValueError("Formatting YAML needs PyYAML installed") from exc
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML: {exc}") from exc
+        return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
     raise ValueError(f"Unsupported format: {fmt}")
 
 

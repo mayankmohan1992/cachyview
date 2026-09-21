@@ -558,6 +558,25 @@ def test_redact_leaves_other_text(tmp_path):
     assert "KEEPME" in text
 
 
+def test_redact_page_only_touches_target(tmp_path):
+    """A rect redacted on one page must not be applied to the others."""
+    src = tmp_path / "multi.pdf"
+    make_pdf(src, pages=3)
+    marked = tmp_path / "marked.pdf"
+    doc = fitz.open(src)
+    for n in range(3):
+        doc[n].insert_text((40, 40), f"SECRET{n}", fontsize=30)
+    doc.save(marked)
+    doc.close()
+
+    out = pdf.redact(marked, tmp_path / "red.pdf", [(10, 20, 350, 70)], page=2)
+    reopened = fitz.open(out)
+    assert "SECRET1" not in reopened.get_page_text(1)
+    assert "SECRET0" in reopened.get_page_text(0)
+    assert "SECRET2" in reopened.get_page_text(2)
+    reopened.close()
+
+
 def test_insert_pdf_pages(tmp_path):
     """Inserting a 1-page PDF after page 1 grows the document by one."""
     src = tmp_path / "src.pdf"
@@ -577,6 +596,22 @@ def test_append_image_as_page(tmp_path):
     Image.new("RGB", (200, 300), (10, 20, 30)).save(pic)
     out = pdf.append_pages(src, tmp_path / "out.pdf", pic)
     assert fitz.open(out).page_count == 3
+
+
+def test_insert_image_honors_after(tmp_path):
+    """An inserted image lands at the requested position, not just the end."""
+    from PIL import Image
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=3)
+    pic = tmp_path / "pic.png"
+    Image.new("RGB", (200, 300), (10, 20, 30)).save(pic)
+    out = pdf.insert_pages(src, tmp_path / "out.pdf", pic, after=1)
+    d = fitz.open(out)
+    assert d.page_count == 4
+    assert d[1].get_images(), "image must land on page index 1"
+    assert not d[0].get_images()
+    assert not d[2].get_images()
+    d.close()
 
 
 def test_insert_selective_pages(tmp_path):
@@ -620,7 +655,30 @@ def test_outline_round_trip(tmp_path):
     items = pdf.get_outline(out)
     assert {(i["title"], i["page"]) for i in items} == {
         ("Chapter 1", 1), ("Section 1.1", 1), ("Chapter 2", 2)}
+    assert [(i["title"], i["level"]) for i in items] == [
+        ("Chapter 1", 1), ("Section 1.1", 2), ("Chapter 2", 1)]
+    # Feeding get_outline's own output back must not inflate the levels.
+    out2 = pdf.set_outline(out, tmp_path / "out2.pdf", items)
+    assert pdf.get_outline(out2) == items
     assert fitz.open(out).page_count == 2
+
+
+def test_links_reported(tmp_path):
+    """External URIs and internal jumps are surfaced; dangerous kinds are not."""
+    src = tmp_path / "links.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(10, 10, 100, 30),
+                      "uri": "https://example.com"})
+    page.insert_link({"kind": fitz.LINK_GOTO, "from": fitz.Rect(10, 40, 100, 60),
+                      "page": 0})
+    doc.save(src)
+    doc.close()
+    links = pdf.links(src, 1)
+    assert any(l["kind"] == "uri" and l["uri"] == "https://example.com"
+               for l in links)
+    assert any(l["kind"] == "page" for l in links)
+    assert pdf.links(src, 99) == []
 
 
 def test_diff_detects_changed_page(tmp_path):
@@ -633,6 +691,8 @@ def test_diff_detects_changed_page(tmp_path):
     assert res["report"][0]["changed"] is True
     assert res["report"][0]["diff_image"] is not None
     assert res["report"][0]["diff_pct"] > 0
+    # Diff images are returned in memory and must not litter the source dir.
+    assert list(tmp_path.glob(".diff-*")) == []
 
 
 def test_diff_identical_page(tmp_path):
@@ -643,4 +703,73 @@ def test_diff_identical_page(tmp_path):
     res = pdf.diff_pages(a, b)
     assert res["report"][0]["changed"] is False
     assert res["report"][0]["diff_image"] is None
+
+
+# --- layout / conversion --------------------------------------------------
+
+def test_nup_places_pages_on_sheets(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=3)
+    out = pdf.nup(src, tmp_path / "nup.pdf", per_sheet=2)
+    assert fitz.open(out).page_count == 2
+    out4 = pdf.nup(src, tmp_path / "nup4.pdf", per_sheet=4)
+    assert fitz.open(out4).page_count == 1
+
+
+def test_booklet_pads_to_multiple_of_four(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=5)
+    out = pdf.booklet(src, tmp_path / "booklet.pdf")
+    # 5 pages pad to 8 → 4 sheets × 2 sides.
+    assert fitz.open(out).page_count == 4
+
+
+def test_to_html_contains_page_text(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2, text="Hello")
+    out = pdf.to_html(src, tmp_path / "out.html")
+    html = out.read_text(encoding="utf-8")
+    assert "Hello 1" in html and "Hello 2" in html
+    assert html.startswith("<!doctype html>")
+
+
+def test_text_to_pdf_makes_readable_pages(tmp_path):
+    src = tmp_path / "notes.md"
+    src.write_text("# Heading\n\nBody text " * 400, encoding="utf-8")
+    out = pdf.text_to_pdf(src, tmp_path / "notes.pdf")
+    doc = fitz.open(out)
+    assert doc.page_count >= 1
+    assert "Heading" in doc.get_page_text(0)
+    doc.close()
+
+
+@pytest.mark.skipif(not HAVE_QPDF, reason="qpdf not installed")
+def test_linearize_produces_valid_pdf(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2)
+    out = pdf.linearize(src, tmp_path / "lin.pdf")
+    assert out.is_file()
+    assert fitz.open(out).page_count == 2
+
+
+def test_watermark_image_stamp(tmp_path):
+    from PIL import Image
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=1)
+    logo = tmp_path / "logo.png"
+    Image.new("RGBA", (60, 60), (255, 0, 0, 255)).save(logo)
+    out = pdf.watermark(src, tmp_path / "wm.pdf", image=str(logo),
+                        opacity=1.0, scale=0.3)
+    assert fitz.open(out).page_count == 1
+
+
+def test_render_thumbnail(tmp_path):
+    src = tmp_path / "src.pdf"
+    make_pdf(src, pages=2)
+    out = pdf.render_thumbnail(src, tmp_path / "thumb.png", size=128)
+    assert out.is_file() and out.stat().st_size > 0
+    from PIL import Image
+    with Image.open(out) as img:
+        assert max(img.size) <= 128
+
 

@@ -23,9 +23,15 @@ CachyView is a local, offline desktop tool. It does not make network calls and
 does not transmit files. The most relevant security surfaces are:
 
 - **Archive extraction** — path-traversal, symlink-escape and decompression-
-  bomb guards live in `cachyview/core/sandbox.py`. Changes there need tests.
+  bomb guards (ratio, total size and entry-count caps) live in
+  `cachyview/core/sandbox.py` and `cachyview/backends/archive.py`. External
+  tools extract into an isolated staging directory that drops symlinks before
+  files reach the user, and extraction is cancellable. Changes there need
+  tests.
 - **Subprocess handling** — all external tools are invoked with argv lists
   (never a shell) and a scrubbed environment (see `cachyview/core/process.py`).
+- **PDFs** — JavaScript and embedded files are never executed; external links
+  require confirmation and only `http(s)`, `mailto` and `file` schemes open.
 - **Archive passwords** — passed to `7z`/`unrar` as command-line arguments and
   briefly visible in `/proc` to same-user processes; documented as a known
   limitation in `README.md`.

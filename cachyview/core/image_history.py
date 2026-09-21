@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from ..backends.image import Op
+from .safe import write_text_atomic
 
 
 def _store_path() -> Path:
@@ -35,7 +35,7 @@ def _load() -> dict[str, list[dict]]:
 
 
 def _save(data: dict[str, list[dict]]) -> None:
-    _store_path().write_text(json.dumps(data, indent=2))
+    write_text_atomic(_store_path(), json.dumps(data, indent=2))
 
 
 def remember(source: str | Path, ops: list[Op]) -> None:

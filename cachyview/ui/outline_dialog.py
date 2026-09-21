@@ -38,6 +38,7 @@ class OutlineDialog(QDialog):
 
         add_btn = QPushButton("Add")
         del_btn = QPushButton("Remove")
+        upd_btn = QPushButton("Update")
         up_btn = QPushButton("↑")
         down_btn = QPushButton("↓")
 
@@ -46,6 +47,7 @@ class OutlineDialog(QDialog):
         row.addWidget(page)
         row.addWidget(level)
         row.addWidget(add_btn)
+        row.addWidget(upd_btn)
         row.addWidget(del_btn)
         row.addWidget(up_btn)
         row.addWidget(down_btn)
@@ -61,11 +63,32 @@ class OutlineDialog(QDialog):
 
         add_btn.clicked.connect(lambda: self._add_row(
             title.text() or "Untitled", page.value(), level.value()))
+        upd_btn.clicked.connect(
+            lambda: self._update(title.text() or "Untitled",
+                                 page.value(), level.value()))
         del_btn.clicked.connect(self._remove)
         up_btn.clicked.connect(lambda: self._move(-1))
         down_btn.clicked.connect(lambda: self._move(1))
         save.clicked.connect(self._save)
         cancel.clicked.connect(self.reject)
+        self.list.currentItemChanged.connect(self._load_selected)
+        self._title, self._page, self._level = title, page, level
+
+    def _load_selected(self, current, _previous) -> None:
+        if current is None:
+            return
+        d = current.data(Qt.ItemDataRole.UserRole)
+        self._title.setText(d["title"])
+        self._page.setValue(int(d["page"]))
+        self._level.setValue(int(d["level"]))
+
+    def _update(self, title: str, page: int, level: int) -> None:
+        item = self.list.currentItem()
+        if item is None:
+            return
+        item.setData(Qt.ItemDataRole.UserRole,
+                     {"title": title, "page": page, "level": level})
+        item.setText(f"L{level}  p{page}  {title}")
 
     def _add_row(self, title: str, page: int, level: int) -> None:
         item = QListWidgetItem(f"L{level}  p{page}  {title}")
@@ -96,8 +119,8 @@ class OutlineDialog(QDialog):
             QMessageBox.information(self, "Bookmarks",
                                    "No bookmarks to save.")
             return
-        out = pb.set_outline(self.path, self.path, entries,
-                             password=self.password)
+        pb.set_outline(self.path, self.path, entries,
+                       password=self.password)
         self.accept()
         if self.parent() is not None and hasattr(self.parent(), "reload"):
             self.parent().reload()

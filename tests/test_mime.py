@@ -60,10 +60,10 @@ def test_binary_fallback(tmp_path):
     assert detect_kind(f) == Kind.BINARY
 
 
-def test_svg_is_image(tmp_path):
+def test_svg_is_svg(tmp_path):
     f = tmp_path / "vec.svg"
     f.write_bytes(b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"/>')
-    assert detect_kind(f) == Kind.IMAGE
+    assert detect_kind(f) == Kind.SVG
 
 
 def test_empty_file_is_text(tmp_path):

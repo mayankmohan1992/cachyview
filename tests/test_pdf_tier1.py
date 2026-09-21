@@ -1,4 +1,6 @@
 """Tier-1 PDF feature tests: crop/resize, invert, headers/footers, fingerprint."""
+import shutil
+
 import fitz
 import pytest
 from pathlib import Path
@@ -62,3 +64,25 @@ def test_fingerprint(doc):
     assert len(sums["sha256"]) == 64
     # stable across calls
     assert sums == pb.fingerprint(doc)
+
+
+@pytest.mark.skipif(not shutil.which("gs"), reason="needs ghostscript")
+def test_to_pdfa_produces_readable_pdf(doc, tmp_path):
+    out = tmp_path / "archival.pdf"
+    pb.to_pdfa(doc, out, level=2)
+    assert out.is_file() and out.stat().st_size > 0
+    d = fitz.open(out)
+    assert d.page_count == 3
+    d.close()
+
+
+def test_to_pdfa_rejects_bad_level(doc, tmp_path):
+    with pytest.raises(pb.PdfError):
+        pb.to_pdfa(doc, tmp_path / "x.pdf", level=9)
+
+
+@pytest.mark.skipif(not shutil.which("soffice"), reason="needs LibreOffice")
+def test_to_docx_creates_word_file(doc, tmp_path):
+    target = pb.to_docx(doc, tmp_path)
+    assert target.suffix == ".docx" and target.is_file()
+    assert target.stat().st_size > 0

@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -41,7 +42,7 @@ from ..core.sandbox import safe_join
 # Importing zstandard registers tarfile's "zst" compression support (Python's
 # tarfile only advertises 'w:zst' once the module is importable).
 try:
-    import zstandard  # noqa: F401
+    import zstandard
 except ImportError:
     zstandard = None  # tar.zst creation simply unsupported; other formats fine
 
@@ -49,6 +50,7 @@ except ImportError:
 # total may not exceed the absolute cap.  Guards against decompression bombs.
 MAX_RATIO = 200
 MAX_TOTAL_BYTES = 16 * 1024 * 1024 * 1024   # 16 GiB
+MAX_ENTRIES = 100_000                        # pathological entry counts
 DEFAULT_TIMEOUT = 300
 
 
@@ -132,17 +134,26 @@ def _is_rar(path: Path) -> bool:
 
 
 def _run(cmd: list[str], password: str | None = None,
-         timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess:
+         timeout: int = DEFAULT_TIMEOUT, ctx=None) -> subprocess.CompletedProcess:
     """Run an archive tool with a sanitised environment.
 
     ``password`` is also written to stdin.  7z and unrar ignore it there (they
     insist on a terminal), but doing so stops them blocking on a prompt if the
     argv password is ever rejected, which would otherwise hang the worker
-    thread until the timeout.
+    thread until the timeout.  When *ctx* is given the tool is killed if the
+    job is cancelled.
     """
-    from ..core.process import run as run_tool
-    return run_tool(cmd, input_text=(password + "\n") if password is not None else "\n",
-                    timeout=timeout)
+    from ..core.process import ProcessCancelled, run as run_tool
+    try:
+        return run_tool(
+            cmd,
+            input_text=(password + "\n") if password is not None else "\n",
+            timeout=timeout,
+            cancel=(lambda: ctx.cancelled) if ctx is not None else None)
+    except ProcessCancelled:
+        if ctx is not None:
+            ctx.check()          # raises JobCancelled, the job's cancel signal
+        raise
 
 
 _PW_MARKERS = (
@@ -215,6 +226,17 @@ def _parse_7z_listing(text: str) -> tuple[list[Entry], str]:
     return entries, fmt
 
 
+def _comment_from_7z(text: str) -> str:
+    """The archive-level ``Comment =`` line in a 7z -slt banner, if any."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("----------"):
+            break
+        if stripped.lower().startswith("comment ="):
+            return stripped.split("=", 1)[1].strip()
+    return ""
+
+
 def _entry_from_7z(d: dict[str, str]) -> Entry:
     attrs = d.get("Attributes", "")
     is_dir = attrs.startswith("D") or d.get("Folder") == "+"
@@ -264,7 +286,28 @@ def _list_with_zipfile(path: Path) -> ArchiveInfo:
 
 
 _TAR_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-                 ".tar.xz", ".txz", ".tar.zst", ".tzst")
+                 ".tar.xz", ".txz", ".tar.zst", ".tzst",
+                 ".tar.lz4", ".tlz4")
+
+
+def _lz4_decompress(path: Path) -> bytes:
+    """Read an LZ4 frame stream into memory (needs the ``lz4`` package)."""
+    try:
+        import lz4.frame
+    except ImportError as exc:
+        raise ArchiveError(
+            "LZ4 archives need the optional 'python-lz4' package; install it "
+            "with: paru -S --needed python-lz4") from exc
+    try:
+        with open(path, "rb") as fh:
+            return lz4.frame.decompress(fh.read())
+    except Exception as exc:
+        raise ArchiveError(f"Could not decompress {path.name}: {exc}") from exc
+
+
+def _is_single_lz4(path: Path) -> bool:
+    return path.suffix.lower() == ".lz4" and not any(
+        path.name.lower().endswith(s) for s in (".tar.lz4", ".tlz4"))
 
 
 def _is_tar(path: Path) -> bool:
@@ -322,11 +365,17 @@ def _open_tar(path: Path) -> "tarfile.TarFile":
                 raw = d.read()
         except Exception:
             if shutil.which("zstd"):
-                out = subprocess.run(["zstd", "-d", "-c", str(path)],
-                                     capture_output=True, check=True)
+                from ..core.process import run as run_tool
+                out = run_tool(["zstd", "-d", "-c", str(path)],
+                               text=False, timeout=DEFAULT_TIMEOUT)
+                if out.returncode != 0:
+                    raise ArchiveError(
+                        f"Could not decompress {Path(path).name} with zstd.")
                 raw = out.stdout
         if raw is not None:
             return tarfile.open(fileobj=io.BytesIO(raw))
+    if str(path).lower().endswith((".tar.lz4", ".tlz4")):
+        return tarfile.open(fileobj=io.BytesIO(_lz4_decompress(path)))
     raise ArchiveError(f"Could not read {Path(path).name} as a tar archive.")
 
 
@@ -355,11 +404,13 @@ def _list_tar(path: Path) -> ArchiveInfo:
     return info
 
 
-def _extract_tar(src: Path, out: Path, members: list[str] | None) -> list[Path]:
-    import tarfile
+def _extract_tar(src: Path, out: Path, members: list[str] | None,
+                 ctx=None) -> list[Path]:
     written: list[Path] = []
     with _open_tar(src) as tf:
-        for m in tf.getmembers():
+        for i, m in enumerate(tf.getmembers()):
+            if ctx is not None and i % 64 == 0:
+                ctx.check()
             if not m.isfile():
                 continue
             name = _tar_member_name(m.name)
@@ -392,6 +443,12 @@ def list_archive(path: str | os.PathLike, password: str | None = None) -> Archiv
     if _is_tar(p):
         return _list_tar(p)
 
+    if _is_single_lz4(p):
+        data = _lz4_decompress(p)
+        info = ArchiveInfo(path=p, format="lz4")
+        info.entries.append(Entry(name=p.stem, size=len(data), packed=p.stat().st_size))
+        return info
+
     seven = _sevenzip()
     if seven:
         # No -ba: the banner carries the "Type = zip" line we use for the
@@ -403,17 +460,13 @@ def list_archive(path: str | os.PathLike, password: str | None = None) -> Archiv
             raise _classify_error(res.stdout + res.stderr, password is not None)
         entries, fmt = _parse_7z_listing(res.stdout)
         info = ArchiveInfo(path=p, entries=entries, format=fmt or p.suffix.lstrip("."))
+        info.comment = _comment_from_7z(res.stdout)
         info.encrypted = any(e.encrypted for e in entries)
         return info
 
     if zipfile.is_zipfile(p):
         return _list_with_zipfile(p)
     raise ArchiveError("No archive tool available: install the '7zip' package.")
-
-
-_RAR_LINE = re.compile(
-    r"^\s*(?P<attrs>[\w.]+)\s+(?P<size>\d+)\s+(?P<packed>\d+)\s+"
-    r"(?P<ratio>[\d%-]+)\s+(?P<date>[\d-]+\s+[\d:]+)\s+(?P<crc>\w+)\s+(?P<name>.+)$")
 
 
 def _list_rar(path: Path, password: str | None) -> ArchiveInfo:
@@ -472,6 +525,10 @@ def _entry_from_rar(d: dict[str, str]) -> Entry:
 
 def check_bomb(info: ArchiveInfo) -> None:
     """Raise :class:`ArchiveBomb` if the archive expands absurdly."""
+    if info.file_count > MAX_ENTRIES:
+        raise ArchiveBomb(
+            f"Refusing to extract: {info.file_count} entries is more than the "
+            f"{MAX_ENTRIES} limit.")
     total = info.total_size
     if total > MAX_TOTAL_BYTES:
         raise ArchiveBomb(
@@ -505,39 +562,84 @@ def extract(path: str | os.PathLike, dest: str | os.PathLike,
         ctx.progress(-1, f"Extracting {src.name}…")
 
     if _is_rar(src) and _tool("unrar"):
+        staging = Path(tempfile.mkdtemp(prefix=".cachyview-extract-", dir=out))
         cmd = ["unrar", "x", "-y", "-p" + (password or "-"), "--", str(src)]
         cmd += list(members or [])
-        cmd.append(str(out) + os.sep)
+        cmd.append(str(staging) + os.sep)
     elif _is_tar(src):
-        written = _extract_tar(src, out, members)
+        written = _extract_tar(src, out, members, ctx)
         if ctx is not None:
             ctx.progress(100, f"Extracted {len(written)} file(s)")
         return written
+    elif _is_single_lz4(src):
+        name = src.stem
+        if members is not None and name not in members:
+            return []
+        target = safe_join(out, name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_lz4_decompress(src))
+        if ctx is not None:
+            ctx.progress(100, "Extracted 1 file(s)")
+        return [target]
     else:
         seven = _sevenzip()
         if not seven:
-            return _extract_with_zipfile(src, out, members, password)
-        cmd = [seven, "x", "-y", f"-o{out}", f"-p{'' if password is None else password}",
+            return _extract_with_zipfile(src, out, members, password, ctx)
+        staging = Path(tempfile.mkdtemp(prefix=".cachyview-extract-", dir=out))
+        cmd = [seven, "x", "-y", f"-o{staging}", f"-p{'' if password is None else password}",
                "--", str(src)]
         cmd += list(members or [])
 
-    res = _run(cmd, password=password, timeout=DEFAULT_TIMEOUT * 4)
+    res = _run(cmd, password=password, timeout=DEFAULT_TIMEOUT * 4, ctx=ctx)
     if res.returncode != 0:
+        shutil.rmtree(staging, ignore_errors=True)
         raise _classify_error(res.stdout + res.stderr, password is not None)
 
-    written = [f for f in out.rglob("*") if f.is_file()]
+    # External tools can create symlinks; harvest from an isolated staging dir
+    # so a link can never redirect a later write outside *out*, and drop any
+    # symlink before it is exposed to the user.
+    written = _harvest_staging(staging, out, ctx)
     if ctx is not None:
         ctx.progress(100, f"Extracted {len(written)} file(s)")
     return written
 
 
+def _harvest_staging(staging: Path, out: Path, ctx=None) -> list[Path]:
+    """Move a staging tree into *out*, discarding every symlink."""
+    written: list[Path] = []
+    try:
+        for root, dirs, files in os.walk(staging, topdown=True):
+            if ctx is not None:
+                ctx.check()
+            for d in list(dirs):
+                p = Path(root) / d
+                if p.is_symlink():
+                    dirs.remove(d)
+                    p.unlink(missing_ok=True)
+            for f in files:
+                p = Path(root) / f
+                if p.is_symlink():
+                    p.unlink(missing_ok=True)
+                    continue
+                rel = p.relative_to(staging).as_posix()
+                target = safe_join(out, rel)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(p), str(target))
+                written.append(target)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return written
+
+
 def _extract_with_zipfile(src: Path, out: Path, members: list[str] | None,
-                          password: str | None) -> list[Path]:
+                          password: str | None, ctx=None) -> list[Path]:
     written: list[Path] = []
     with zipfile.ZipFile(src) as zf:
         if password:
             zf.setpassword(password.encode())
-        for name in members or zf.namelist():
+        for i, name in enumerate(members or zf.namelist()):
+            if ctx is not None and i % 64 == 0:
+                ctx.check()
             zi = zf.getinfo(name)
             if zi.is_dir():
                 continue
@@ -610,39 +712,46 @@ _TAR_MODES = {
 }
 
 
-def _create_tar(target: Path, sources: list[str | os.PathLike], fmt: str) -> Path:
+def _add_sources(tf, sources: list[str | os.PathLike]) -> None:
+    for src in sources:
+        s = str(src)
+        # "dir/." means "the contents of dir", matching 7z's convention.
+        if s.endswith(("/.", os.sep + ".")):
+            base = Path(s[:-2])
+            for child in sorted(base.iterdir()):
+                tf.add(child, arcname=child.name)
+        else:
+            p = Path(s)
+            tf.add(p, arcname=p.name)
+
+
+def _create_tar(target: Path, sources: list[str | os.PathLike], fmt: str,
+                level: int = 5) -> Path:
     import tarfile
     mode = _TAR_MODES[fmt]
+    # tarfile compression knobs differ per codec: gz/bz2 use compresslevel,
+    # xz uses preset, zstd is left at its default.
+    kwargs: dict = {}
+    if fmt in ("tar.gz", "tar.bz2"):
+        kwargs["compresslevel"] = max(1, min(9, int(level)))
+    elif fmt == "tar.xz":
+        kwargs["preset"] = max(0, min(9, int(level)))
     try:
-        with tarfile.open(target, mode) as tf:
-            for src in sources:
-                s = str(src)
-                # "dir/." means "the contents of dir", matching 7z's convention.
-                if s.endswith(("/.", os.sep + ".")):
-                    base = Path(s[:-2])
-                    for child in sorted(base.iterdir()):
-                        tf.add(child, arcname=child.name)
-                else:
-                    p = Path(s)
-                    tf.add(p, arcname=p.name)
+        with tarfile.open(target, mode, **kwargs) as tf:
+            _add_sources(tf, sources)
     except (OSError, tarfile.TarError) as exc:
         # tarfile's zst mode needs zstandard importable; if that path failed,
         # fall back to writing an uncompressed tar and piping through zstd.
         if "zst" in mode and shutil.which("zstd"):
-            import tempfile
             raw = target.with_suffix(".tar")
             with tarfile.open(raw, "w") as tf:
-                for src in sources:
-                    s = str(src)
-                    if s.endswith(("/.", os.sep + ".")):
-                        base = Path(s[:-2])
-                        for child in sorted(base.iterdir()):
-                            tf.add(child, arcname=child.name)
-                    else:
-                        p = Path(s)
-                        tf.add(p, arcname=p.name)
-            subprocess.run(["zstd", "-q", "-f", str(raw), "-o", str(target)],
-                           check=True)
+                _add_sources(tf, sources)
+            from ..core.process import run as run_tool
+            res = run_tool(["zstd", "-q", "-f", str(raw), "-o", str(target)],
+                           text=False, timeout=DEFAULT_TIMEOUT)
+            if res.returncode != 0:
+                err = (res.stderr or b"").decode("utf-8", "replace").strip()
+                raise ArchiveError(err[-300:] or "zstd compression failed.")
             raw.unlink(missing_ok=True)
             return target
         raise ArchiveError(f"Could not create {target.name}: {exc}") from exc
@@ -670,7 +779,7 @@ def create(archive: str | os.PathLike, sources: list[str | os.PathLike],
         if password:
             raise ArchiveError(
                 f"The {fmt} format cannot be encrypted; use zip or 7z instead.")
-        result = _create_tar(target, sources, fmt)
+        result = _create_tar(target, sources, fmt, level)
         if ctx is not None:
             ctx.progress(100, "Done")
         return result
@@ -700,8 +809,11 @@ def create(archive: str | os.PathLike, sources: list[str | os.PathLike],
 # --------------------------------------------------------------------------
 
 _READ_ONLY_SUFFIXES = {
+    # Formats 7z cannot rewrite.
     ".iso", ".rpm", ".deb", ".cab", ".cpio", ".apk", ".jar", ".xpi",
-    ".epub", ".cbz", ".cbr", ".cb7",
+    ".epub", ".cbz", ".cbr", ".cb7", ".rar",
+    # Single-file compressed streams (only the tar.* containers are writable).
+    ".gz", ".bz2", ".xz", ".zst", ".lz4", ".lzma", ".z",
 }
 
 

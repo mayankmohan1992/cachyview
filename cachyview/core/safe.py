@@ -59,3 +59,22 @@ def safe_backup_path(target: str | os.PathLike) -> Path:
     """The ``target~`` recovery path that :func:`replace_in_place` leaves."""
     target = Path(target)
     return target.with_name(f"{target.name}~")
+
+
+def write_text_atomic(path: str | os.PathLike, text: str, *,
+                      encoding: str = "utf-8") -> Path:
+    """Write *text* via a sibling temp file + rename, so a crash cannot
+    truncate an existing configuration file."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.cachyview-tmp-{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding=encoding) as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return target

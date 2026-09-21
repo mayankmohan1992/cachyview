@@ -3,15 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
+from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout,
                              QInputDialog, QLabel, QListWidget, QListWidgetItem,
                              QMenu, QMessageBox, QScrollArea, QSplitter, QToolBar,
                              QToolButton, QVBoxLayout, QWidget)
 
 from ..backends import image as ib
-from ..core.jobs import submit
 
 ZOOM_STEPS = [0.05, 0.1, 0.25, 0.33, 0.5, 0.67, 1.0, 1.5, 2.0, 3.0, 4.0, 8.0]
 
@@ -141,12 +140,12 @@ class ImageCanvas(QScrollArea):
     def actual_size(self) -> None:
         self.set_zoom(1.0)
 
-    def resizeEvent(self, a0) -> None:  # noqa: N802
+    def resizeEvent(self, a0) -> None:
         super().resizeEvent(a0)
         if self._fit:
             self._redraw()
 
-    def wheelEvent(self, a0) -> None:  # noqa: N802
+    def wheelEvent(self, a0) -> None:
         if a0 is not None and a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
             delta = a0.angleDelta().y()
             pos = a0.position()
@@ -157,13 +156,13 @@ class ImageCanvas(QScrollArea):
         else:
             super().wheelEvent(a0)
 
-    def mousePressEvent(self, a0) -> None:  # noqa: N802
+    def mousePressEvent(self, a0) -> None:
         if a0 is not None and a0.button() == Qt.MouseButton.LeftButton:
             self._drag_from = a0.position().toPoint()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(a0)
 
-    def mouseMoveEvent(self, a0) -> None:  # noqa: N802
+    def mouseMoveEvent(self, a0) -> None:
         if a0 is not None and self._drag_from is not None:
             delta = a0.position().toPoint() - self._drag_from
             self._drag_from = a0.position().toPoint()
@@ -173,7 +172,7 @@ class ImageCanvas(QScrollArea):
                     bar.setValue(bar.value() - d)
         super().mouseMoveEvent(a0)
 
-    def mouseReleaseEvent(self, a0) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, a0) -> None:
         self._drag_from = None
         self.unsetCursor()
         super().mouseReleaseEvent(a0)
@@ -201,7 +200,7 @@ class ImageTab(QWidget):
         self._source_path = Path(path)  # original file the edits derive from
         try:
             self.ops = self._history.load(self._source_path)
-        except Exception:  # noqa: BLE001 - history is best-effort
+        except Exception:
             self.ops = []
 
         self.canvas = ImageCanvas(self)
@@ -281,8 +280,14 @@ class ImageTab(QWidget):
             ("Add noise", "noise", {"amount": 12}),
         ):
             fmenu.addAction(name, lambda o=op, a=args: self.add_op(o, **a))
+        fmenu.addSeparator()
+        fmenu.addAction("Watermark…", self.watermark_dialog)
         filt.setMenu(fmenu)
         bar.addWidget(filt)
+        self.hist_action = add_action(
+            bar, ("view-statistics", "office-chart-bar"), "Histogram",
+            self.toggle_histogram, checkable=True,
+            tooltip="Show RGB/luma histogram")
         mark = icon_button(self, ("draw-freehand", "draw-rectangle"), "Markup")
         mark.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         mmenu = QMenu(self)
@@ -315,6 +320,9 @@ class ImageTab(QWidget):
         self.adjust.toggled.connect(self._on_adjust_toggle)
         self.adjust.reset_all.connect(self._reset_adjust)
         self._adjust_keys = set()
+        from .histogram import HistogramPanel
+        self.histogram = HistogramPanel(self)
+        self.histogram.setVisible(False)
         self.film = QListWidget(self)
         self.film.setMaximumHeight(88)
         self.film.setFlow(QListWidget.Flow.LeftToRight)
@@ -323,10 +331,12 @@ class ImageTab(QWidget):
         self._slideshow = None
         self._anim = None
         self._frames: list = []
+        self._durations: list[int] = []
 
         split = QSplitter(Qt.Orientation.Horizontal, self)
         split.addWidget(self.canvas)
         split.addWidget(self.adjust)
+        split.addWidget(self.histogram)
         split.setStretchFactor(0, 5)
 
         layout = QVBoxLayout(self)
@@ -352,7 +362,7 @@ class ImageTab(QWidget):
         """Write the current edit stack to disk (best-effort)."""
         try:
             self._history.remember(self._source_path, self.ops)
-        except Exception:  # noqa: BLE001 - persistence must never block editing
+        except Exception:
             pass
 
     def add_op(self, name: str, **args) -> None:
@@ -400,7 +410,7 @@ class ImageTab(QWidget):
         self._redo.clear()
         try:
             self._history.clear(self._source_path)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         self._source_path = Path(path)
         self.current = self.original.copy()
@@ -426,10 +436,18 @@ class ImageTab(QWidget):
 
     def _refresh(self) -> None:
         self.canvas.set_image(pil_to_qpixmap(self.current))
+        if self.histogram.isVisible():
+            self.histogram.set_image(self.current)
         applied = f" · {len(self.ops)} edit(s)" if self.ops else ""
         self.status.setText(
             f"{self.current.width}×{self.current.height} · {self.info.format} "
             f"· {self.current.mode}{applied}")
+
+    def toggle_histogram(self) -> None:
+        show = self.hist_action is not None and self.hist_action.isChecked()
+        self.histogram.setVisible(show)
+        if show:
+            self.histogram.set_image(self.current)
 
     # --- dialogs ---------------------------------------------------------
     # --- cropping ---------------------------------------------------------
@@ -491,7 +509,7 @@ class ImageTab(QWidget):
         self.status.setText(hints.get(mode, ""))
         self.inspect_readout.connect(self.status.setText)
 
-    def keyPressEvent(self, a0) -> None:  # noqa: N802
+    def keyPressEvent(self, a0) -> None:
         if (a0 is not None and a0.key() == Qt.Key.Key_Escape
                 and self.canvas.crop_active):
             self.cancel_crop()
@@ -504,7 +522,9 @@ class ImageTab(QWidget):
         dialog = ResizeDialog(self.current.width, self.current.height, self)
         if dialog.exec() == dialog.DialogCode.Accepted:
             w, h = dialog.result_size()
-            self.add_op("resize", width=w, height=h, keep_aspect=False)
+            self.add_op("resize", width=w, height=h,
+                        keep_aspect=dialog.keep_aspect(),
+                        resample=dialog.resample_name())
 
     def canvas_dialog(self) -> None:
         from .image_resize import CanvasDialog
@@ -517,6 +537,18 @@ class ImageTab(QWidget):
             self, "Straighten", "Angle (degrees):", 0, -45, 45, 1)
         if ok and abs(angle) > 0.01:
             self.add_op("straighten", angle=angle)
+
+    def watermark_dialog(self) -> None:
+        from .image_resize import WatermarkDialog
+        dialog = WatermarkDialog(self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        if not values.get("text") and not values.get("image"):
+            QMessageBox.information(self, "Watermark",
+                                    "Enter text or choose an image first.")
+            return
+        self.add_op("watermark", **values)
 
     def export_file(self) -> None:
         from .image_resize import ExportDialog
@@ -564,7 +596,7 @@ class ImageTab(QWidget):
     def _reset_adjust(self) -> None:
         names = {"brightness", "contrast", "saturation", "sharpness", "gamma",
                  "exposure", "temperature", "tint", "hue", "opacity",
-                 "grayscale", "invert"}
+                 "levels", "curves", "grayscale", "invert"}
         self.ops = [op for op in self.ops if op.name not in names]
         self._persist()
         self._reapply()
@@ -634,22 +666,32 @@ class ImageTab(QWidget):
             return
         try:
             self._frames = [pil_to_qpixmap(f) for f in ib.load_frames(self.path)]
+            self._durations = ib.frame_durations(self.path)
         except Exception:
             self._frames = []
+            self._durations = []
             return
         if len(self._frames) < 2:
             return
         self._anim_i = 0
         self._anim = QTimer(self)
-        self._anim.setInterval(80)
+        self._anim.setSingleShot(True)
         self._anim.timeout.connect(self._anim_tick)
-        self._anim.start()
+        self._schedule_frame()
+
+    def _schedule_frame(self) -> None:
+        if self._anim is None:
+            return
+        idx = self._anim_i % len(self._durations) if self._durations else 0
+        ms = self._durations[idx] if self._durations else 100
+        self._anim.start(max(20, ms))
 
     def _anim_tick(self) -> None:
         if not self._frames:
             return
         self._anim_i = (self._anim_i + 1) % len(self._frames)
         self.canvas.set_image(self._frames[self._anim_i])
+        self._schedule_frame()
 
     def print_file(self) -> None:
         from PyQt6.QtGui import QPainter
@@ -698,7 +740,7 @@ class ImageTab(QWidget):
         # track any future edits against the newly saved file.
         try:
             self._history.clear(self._source_path)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         self._source_path = Path(target)
         self.modified_changed.emit(False)

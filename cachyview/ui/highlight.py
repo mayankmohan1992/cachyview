@@ -110,7 +110,7 @@ class CodeHighlighter(QSyntaxHighlighter):
         # Pygments highlighting per-block is heavy; keep a simple keyword pass.
         _ = (get_lexer_by_name, guess_lexer, Token, language)
 
-    def highlightBlock(self, text: str) -> None:  # noqa: N802
+    def highlightBlock(self, text: str) -> None:
         for regex, fmt in self._rules:
             for match in regex.finditer(text):
                 self.setFormat(match.start(), match.end() - match.start(), fmt)

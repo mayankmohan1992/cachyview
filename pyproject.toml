@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cachyview"
-version = "0.2.0"
+version = "0.3.0"
 description = "Fast native archive, PDF, image and text toolkit for Linux"
 requires-python = ">=3.11"
 dependencies = ["PyQt6", "Pillow"]
 
 [project.optional-dependencies]
 pdf = ["PyMuPDF", "pikepdf", "img2pdf", "numpy"]
-dev = ["pytest"]
+formats = ["pillow-heif", "pillow-avif-plugin", "pillow-jxl-plugin", "rawpy", "lz4", "pyyaml"]
+dev = ["pytest", "ruff", "pyyaml"]
 
 [project.scripts]
 cachyview = "cachyview.__main__:main"
@@ -23,3 +24,10 @@ cachyview = ["data/*.svg"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E9", "F"]

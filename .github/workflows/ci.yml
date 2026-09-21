@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04]
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +24,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             python3-pyqt6 libgl1 libegl1 libglib2.0-0 xvfb \
             ghostscript qpdf poppler-utils tesseract-ocr \
-            7zip p7zip-full unrar
+            7zip p7zip-full unrar appstream desktop-file-utils
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -36,7 +36,33 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev,pdf]"
           # Provide the external helpers the tools shell out to.
-          python -m pip install ocrmypdf img2pdf zstandard
+          python -m pip install ocrmypdf img2pdf zstandard lz4
+
+      - name: Lint
+        run: python -m ruff check cachyview
 
       - name: Run tests
         run: xvfb-run -a pytest -q
+
+  arch:
+    name: Test on Arch (CachyOS target)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install distro packages
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            python python-pyqt6 qt6-svg python-pillow python-pymupdf \
+            python-pikepdf python-zstandard python-pygments python-img2pdf \
+            python-numpy python-pytest python-yaml python-lz4 ruff \
+            ghostscript qpdf poppler tesseract 7zip unrar \
+            appstream desktop-file-utils xvfb
+
+      - name: Lint
+        run: python -m ruff check cachyview
+
+      - name: Run tests
+        run: xvfb-run -a python -m pytest -q

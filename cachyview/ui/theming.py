@@ -55,7 +55,6 @@ def apply_system_theme(app) -> str:
 def _apply_color_scheme(app, dark: bool) -> None:
     """Tint the palette for dark/light without fighting the platform theme."""
     from PyQt6.QtGui import QColor, QPalette
-    from PyQt6.QtCore import Qt
 
     pal = QPalette()
     if dark:

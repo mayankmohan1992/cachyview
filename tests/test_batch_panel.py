@@ -60,6 +60,7 @@ def test_panel_runs_and_updates_rows(workdir, app):
             break
         time.sleep(0.02)
 
+    app.processEvents()
     assert panel._job is not None
     assert all(it.status == "done" for it in panel._job.items)
     # The table reflects per-row status.
@@ -82,6 +83,8 @@ def test_panel_shows_failure_in_red(workdir, app):
         if panel._job and panel._job.items[0].status in ("done", "failed"):
             break
         time.sleep(0.02)
+    # The row colour is applied via a queued signal; flush it.
+    app.processEvents()
     assert panel._job.items[0].status == "failed"
     # The status cell is coloured red.
     assert panel.table.item(0, 1).foreground().color().red() > 128

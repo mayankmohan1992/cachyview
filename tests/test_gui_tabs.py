@@ -64,24 +64,27 @@ def test_human_size(size, want):
 
 # --- archive tab ----------------------------------------------------------
 
-def test_archive_tab_lists_entries(app, zip_file):
+def test_archive_tab_lists_entries(app, pump, zip_file):
     tab = ArchiveTab(zip_file)
+    pump(lambda: not tab.is_listing)
     assert tab.info is not None
     assert tab.info.file_count == 2
     assert tab.tree.topLevelItemCount() >= 1
     assert "2 files" in tab.status.text()
 
 
-def test_archive_tab_builds_folder_tree(app, zip_file):
+def test_archive_tab_builds_folder_tree(app, pump, zip_file):
     tab = ArchiveTab(zip_file)
+    pump(lambda: not tab.is_listing)
     labels = [tab.tree.topLevelItem(i).text(0)
               for i in range(tab.tree.topLevelItemCount())]
     assert "docs" in labels
     assert "readme.txt" in labels
 
 
-def test_archive_filter_hides_rows(app, zip_file):
+def test_archive_filter_hides_rows(app, pump, zip_file):
     tab = ArchiveTab(zip_file)
+    pump(lambda: not tab.is_listing)
     tab.filter.setText("readme")
     visible = [tab.tree.topLevelItem(i).text(0)
                for i in range(tab.tree.topLevelItemCount())
@@ -91,8 +94,19 @@ def test_archive_filter_hides_rows(app, zip_file):
     assert not tab.tree.topLevelItem(0).isHidden()
 
 
-def test_archive_double_click_extracts_and_emits(app, zip_file, qtbot=None):
+def test_archive_flat_view_uses_full_paths(app, pump, zip_file):
     tab = ArchiveTab(zip_file)
+    pump(lambda: not tab.is_listing)
+    tab.flat.setChecked(True)
+    labels = [tab.tree.topLevelItem(i).text(0)
+              for i in range(tab.tree.topLevelItemCount())]
+    assert "docs/notes.txt" in labels
+    assert "docs" not in labels, "flat view must not show folders"
+
+
+def test_archive_double_click_extracts_and_emits(app, pump, zip_file, qtbot=None):
+    tab = ArchiveTab(zip_file)
+    pump(lambda: not tab.is_listing)
     emitted = []
     tab.open_request.connect(emitted.append)
 
@@ -110,7 +124,7 @@ def test_archive_double_click_extracts_and_emits(app, zip_file, qtbot=None):
     tab.cleanup()
 
 
-def test_archive_sandbox_purged_on_cleanup(app, zip_file):
+def test_archive_sandbox_purged_on_cleanup(app, pump, zip_file):
     tab = ArchiveTab(zip_file)
     sandbox = tab._sandbox.path
     assert sandbox.exists()
@@ -118,16 +132,18 @@ def test_archive_sandbox_purged_on_cleanup(app, zip_file):
     assert not sandbox.exists()
 
 
-def test_archive_tab_integrity_ok(app, zip_file, monkeypatch):
+def test_archive_tab_integrity_ok(app, pump, zip_file, monkeypatch):
     shown = {}
     monkeypatch.setattr(
         "cachyview.ui.archive_tab.QMessageBox.information",
         lambda *a, **k: shown.update(text=a[2]))
-    ArchiveTab(zip_file).test_integrity()
+    tab = ArchiveTab(zip_file)
+    pump(lambda: not tab.is_listing)
+    tab.test_integrity()
     assert "intact" in shown.get("text", "")
 
 
-def test_encrypted_archive_does_not_block(app, tmp_path):
+def test_encrypted_archive_does_not_block(app, pump, tmp_path):
     """Opening an encrypted archive must not pop a modal dialog.
 
     Regression: the constructor called QInputDialog, which hangs forever when
@@ -144,6 +160,7 @@ def test_encrypted_archive_does_not_block(app, tmp_path):
     # A zip keeps filenames readable, so listing succeeds and the tab must
     # flag the lock rather than block on a dialog.
     tab = ArchiveTab(enc)          # must return promptly
+    pump(lambda: not tab.is_listing)
     assert tab.info is not None and tab.info.encrypted
     assert "encrypted" in tab.status.text()
 
@@ -155,14 +172,16 @@ def test_encrypted_archive_does_not_block(app, tmp_path):
 
     tab.password = "letmein"
     tab.reload(prompt=False)
+    pump(lambda: not tab.is_listing)
     assert tab.info is not None and tab.info.file_count == 1
     assert "unlocked" in tab.status.text()
 
 
-def test_broken_archive_reports_error(app, tmp_path):
+def test_broken_archive_reports_error(app, pump, tmp_path):
     bad = tmp_path / "notreally.zip"
     bad.write_bytes(b"PK\x03\x04" + b"\xff" * 200)
     tab = ArchiveTab(bad)
+    pump(lambda: not tab.is_listing)
     assert tab.error or tab.info is not None
 
 

@@ -16,8 +16,8 @@ bar.  The image rectangle (in image-pixel space) is supplied by ``configure``.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal, QPoint, QPointF, QRect, Qt
-from PyQt6.QtGui import (QColor, QCursor, QPainter, QPen, QPixmap)
+from PyQt6.QtCore import pyqtSignal, QPoint
+from PyQt6.QtGui import (QColor, QPainter, QPen, QPixmap)
 from PyQt6.QtWidgets import QWidget
 
 
@@ -83,7 +83,7 @@ class InspectOverlay(QWidget):
         return None
 
     # --- events -----------------------------------------------------------
-    def mousePressEvent(self, a0) -> None:  # noqa: N802
+    def mousePressEvent(self, a0) -> None:
         if self._mode == "ruler" and a0 is not None:
             self._drag_start = a0.position().toPoint()
             self._drag_now = self._drag_start
@@ -91,7 +91,7 @@ class InspectOverlay(QWidget):
             self._copy_color(a0.position().toPoint())
         super().mousePressEvent(a0)
 
-    def mouseMoveEvent(self, a0) -> None:  # noqa: N802
+    def mouseMoveEvent(self, a0) -> None:
         if a0 is not None:
             pos = a0.position().toPoint()
             self._last_image_pt = self._to_image(pos)
@@ -101,7 +101,7 @@ class InspectOverlay(QWidget):
             self._emit_readout()
         super().mouseMoveEvent(a0)
 
-    def mouseReleaseEvent(self, a0) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, a0) -> None:
         if self._mode == "ruler":
             self._drag_start = None
             self._drag_now = None
@@ -113,7 +113,6 @@ class InspectOverlay(QWidget):
         if px is None:
             return
         x, y = px
-        img = self.parent().parent()  # ImageTab -> needs current image; handled by host
         color = self._color_at(x, y)
         if color is None:
             return
@@ -155,7 +154,7 @@ class InspectOverlay(QWidget):
                 f"{dist * self._zoom:.1f} px screen")
 
     # --- rendering --------------------------------------------------------
-    def paintEvent(self, a0) -> None:  # noqa: N802
+    def paintEvent(self, a0) -> None:
         if not self.active:
             return
         painter = QPainter(self)

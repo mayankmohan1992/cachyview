@@ -7,11 +7,14 @@ import subprocess
 from enum import Enum
 from pathlib import Path
 
+from .process import run as run_tool
+
 
 class Kind(str, Enum):
     ARCHIVE = "archive"
     PDF = "pdf"
     IMAGE = "image"
+    SVG = "svg"
     TEXT = "text"
     BINARY = "binary"
 
@@ -22,9 +25,10 @@ ARCHIVE_EXTS = {
     ".rpm", ".jar", ".apk", ".xpi", ".epub", ".cbz", ".cbr", ".cb7", ".arj", ".lzh",
 }
 PDF_EXTS = {".pdf"}
+SVG_EXTS = {".svg", ".svgz"}
 IMAGE_EXTS = {
     ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".webp", ".tif", ".tiff",
-    ".svg", ".svgz", ".ico", ".ppm", ".pgm", ".pbm", ".pnm", ".xpm", ".tga",
+    ".ico", ".ppm", ".pgm", ".pbm", ".pnm", ".xpm", ".tga",
     ".avif", ".jxl", ".heic", ".heif", ".psd", ".dds", ".jp2", ".j2k",
     ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".rw2", ".raf", ".pef",
 }
@@ -111,7 +115,7 @@ def detect_kind(path: str | os.PathLike) -> Kind:
         pass
 
     if suffix == ".svg" or name.endswith(".svgz"):
-        return Kind.IMAGE
+        return Kind.SVG
 
     magic = _magic_kind(head)
     if magic is not None:
@@ -137,10 +141,9 @@ def mime_type(path: str | os.PathLike) -> str:
     if guessed:
         return guessed
     try:
-        out = subprocess.run(
+        out = run_tool(
             ["file", "--brief", "--mime-type", "--", str(path)],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
+            timeout=5)
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()
     except (OSError, subprocess.SubprocessError):

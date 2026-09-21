@@ -23,7 +23,10 @@ uninstall() {
         "$APP_DIR/venv/bin/python" -m cachyview --uninstall-integration || true
     else
         rm -f "${XDG_DATA_HOME:-$HOME/.local/share}"/applications/cachyview.desktop
+        rm -f "${XDG_DATA_HOME:-$HOME/.local/share}"/applications/org.cachyview.CachyView.desktop
+        rm -f "${XDG_DATA_HOME:-$HOME/.local/share}"/metainfo/org.cachyview.CachyView.metainfo.xml
         rm -f "${XDG_DATA_HOME:-$HOME/.local/share}"/kio/servicemenus/cachyview-*.desktop
+        rm -f "${XDG_DATA_HOME:-$HOME/.local/share}"/thumbnailers/cachyview.thumbnailer
     fi
     rm -rf "$APP_DIR"
     rm -f "$BIN_DIR/cachyview" "$BIN_DIR/cachyview-cli"
@@ -38,7 +41,7 @@ uninstall() {
 
 # --- required system packages ------------------------------------------------
 missing=()
-for pkg in python-pyqt6 python-pillow python-zstandard 7zip; do
+for pkg in python-pyqt6 python-pillow 7zip; do
     pacman -Q "$pkg" &>/dev/null || missing+=("$pkg")
 done
 if (( ${#missing[@]} )); then
@@ -46,6 +49,17 @@ if (( ${#missing[@]} )); then
     echo "Install them first:"
     echo "  paru -S --needed ${missing[*]}"
     exit 1
+fi
+
+# Optional packages improve features but are not required (see --check-deps).
+optional=(python-zstandard python-lz4)
+opt_missing=()
+for pkg in "${optional[@]}"; do
+    pacman -Q "$pkg" &>/dev/null || opt_missing+=("$pkg")
+done
+if (( ${#opt_missing[@]} )); then
+    info "Optional packages not installed: ${opt_missing[*]}"
+    echo "  paru -S --needed ${opt_missing[*]}   # tar.zst creation, LZ4 archives"
 fi
 
 # --- build the app venv -------------------------------------------------------
@@ -66,6 +80,22 @@ SITE_DIR="$("$APP_DIR/venv/bin/python" -c 'import sysconfig; print(sysconfig.get
 echo "$APP_DIR" > "$SITE_DIR/cachyview.pth"
 "$APP_DIR/venv/bin/python" -c "import cachyview" || {
     red "The app is not importable from its virtualenv."; exit 1; }
+
+# --- PDF engine ---------------------------------------------------------------
+# Prefer the distro packages (seen through --system-site-packages).  If the
+# system PyMuPDF is missing or its native library is broken (a real failure
+# mode after partial upgrades), install a working copy into the venv so PDF
+# support does not silently disappear.  --ignore-installed makes the venv copy
+# shadow the system one.
+if ! "$APP_DIR/venv/bin/python" -c "import fitz" 2>/dev/null; then
+    info "Installing the PDF engine (PyMuPDF/pikepdf/img2pdf/pygments)…"
+    if ! "$APP_DIR/venv/bin/python" -m pip install --quiet --ignore-installed \
+            PyMuPDF pikepdf img2pdf pygments; then
+        red "Could not install the PDF engine. PDF features will be unavailable."
+        echo "  Install 'python-pymupdf python-pikepdf python-pygments img2pdf'"
+        echo "  or run this installer with a network connection."
+    fi
+fi
 
 # --- launcher scripts ---------------------------------------------------------
 # `env -u PYTHONPATH` matters: a PYTHONPATH inherited from another interpreter

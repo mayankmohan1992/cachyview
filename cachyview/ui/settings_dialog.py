@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 
 from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QLabel,
                              QMessageBox, QVBoxLayout, QWidget)
 
 from ..core import settings
+from ..core.process import run as run_tool
 from ..integration.desktop import ARCHIVE_MIMES, IMAGE_MIMES, PDF_MIMES, TEXT_MIMES
 
 _GROUPS = (
@@ -63,5 +63,4 @@ class SettingsDialog(QDialog):
                 "Install xdg-utils to register a default application.")
             return
         for mime in mimes:
-            subprocess.run([tool, "default", "cachyview.desktop", mime],
-                           capture_output=True, check=False, timeout=10)
+            run_tool([tool, "default", "cachyview.desktop", mime], timeout=10)

@@ -4,15 +4,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (QAbstractItemView, QFileDialog, QHeaderView,
-                             QInputDialog, QLabel, QLineEdit,
-                             QMenu, QMessageBox, QSplitter, QToolBar, QToolButton,
-                             QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog,
+                             QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+                             QLineEdit, QMenu, QMessageBox, QSplitter, QToolBar,
+                             QToolButton, QTreeWidgetItem,
+                             QVBoxLayout, QWidget)
 
 from ..backends import archive as ar
-from ..core.jobs import submit
+from ..core.jobs import make_job, start_job, submit
 from .archive_drag import DraggableArchiveTree
-from ..core.sandbox import Sandbox, UnsafePath
+from ..core.sandbox import Sandbox, UnsafePath, safe_join
 
 
 def human_size(size: int) -> str:
@@ -28,6 +29,7 @@ class ArchiveTab(QWidget):
     """Browse an archive, preview members and extract them."""
 
     open_request = pyqtSignal(str)      # a member was extracted for viewing
+    listed = pyqtSignal()               # listing finished (ok, error or locked)
 
     def __init__(self, path: Path, parent: QWidget | None = None):
         super().__init__(parent)
@@ -37,6 +39,8 @@ class ArchiveTab(QWidget):
         self.error = ""
         self._sandbox = Sandbox(prefix="arc-")
         self._jobs: list = []
+        self._list_seq = 0
+        self.is_listing = False
 
         self.tree = DraggableArchiveTree(self)
         self.tree.setColumnCount(6)
@@ -54,6 +58,8 @@ class ArchiveTab(QWidget):
         self.filter.setPlaceholderText("Filter files…")
         self.filter.setClearButtonEnabled(True)
         self.filter.textChanged.connect(self._apply_filter)
+        self.flat = QCheckBox("Flat view", self)
+        self.flat.toggled.connect(lambda _v: self._populate())
 
         self.status = QLabel("Loading…", self)
 
@@ -69,12 +75,15 @@ class ArchiveTab(QWidget):
         add_action(bar, "document-decrypt", "Unlock…", self.unlock)
         add_action(bar, "view-refresh", "Reload",
                    lambda: self.reload(prompt=False))
+        add_action(bar, "document-properties", "Comment", self.show_comment)
         mutate = icon_button(self, "document-edit", "Edit")
         mutate.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         emenu = QMenu(self)
-        emenu.addAction("Add files…", self.add_files)
-        emenu.addAction("Delete", self.delete_selected)
-        emenu.addAction("Rename…", self.rename_selected)
+        self._mutate_actions = [
+            emenu.addAction("Add files…", self.add_files),
+            emenu.addAction("Delete", self.delete_selected),
+            emenu.addAction("Rename…", self.rename_selected),
+        ]
         emenu.addAction("Create archive…", self.create_archive)
         mutate.setMenu(emenu)
         bar.addWidget(mutate)
@@ -93,7 +102,11 @@ class ArchiveTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(bar)
-        layout.addWidget(self.filter)
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(4, 0, 4, 0)
+        filter_row.addWidget(self.filter, 1)
+        filter_row.addWidget(self.flat)
+        layout.addLayout(filter_row)
         layout.addWidget(split, 1)
         layout.addWidget(self.status)
 
@@ -102,27 +115,75 @@ class ArchiveTab(QWidget):
 
     # --- loading ---------------------------------------------------------
     def reload(self, *, prompt: bool = True) -> None:
-        """Read the archive listing.
+        """Read the archive listing on a background thread.
 
         Failures set ``self.error`` and update the status bar instead of
         opening a modal dialog, so constructing the tab never blocks waiting
         for input.  The password dialog appears only on an explicit retry.
+        Listing runs off the GUI thread (design rule 2); ``listed`` fires when
+        it settles and ``is_listing`` tracks progress.
         """
         self.error = ""
         self.status.setText("Reading archive…")
-        try:
-            self.info = ar.list_archive(self.path, self.password)
-        except ar.PasswordRequired as exc:
-            self.error = str(exc)
+        self.is_listing = True
+        self._list_seq += 1
+        seq = self._list_seq
+        path, password = self.path, self.password
+
+        def work(_ctx):
+            try:
+                return ("ok", ar.list_archive(path, password))
+            except ar.PasswordRequired as exc:
+                return ("password", str(exc))
+            except ar.ArchiveError as exc:
+                return ("error", str(exc))
+
+        job = make_job(work, name="archive-list")
+        job.signals.finished.connect(
+            lambda result: self._on_listed(seq, result, prompt))
+        job.signals.failed.connect(
+            lambda msg, _tb: self._on_list_failed(seq, msg))
+        self._jobs.append(job)
+        start_job(job)
+
+    def _on_listed(self, seq: int, result: tuple, prompt: bool) -> None:
+        if seq != self._list_seq:
+            return                      # a newer reload supersedes this one
+        self.is_listing = False
+        kind, payload = result
+        if kind == "ok":
+            self.info = payload
+            self._populate()
+            self._update_mutate_state()
+        elif kind == "password":
+            self.info = None
+            self.error = payload
             self.status.setText("Password required — click Unlock to enter it.")
+            self._update_mutate_state()
             if prompt and self._ask_password():
-                return self.reload(prompt=False)
+                self.reload(prompt=False)
+        else:
+            self.info = None
+            self.error = payload
+            self.status.setText(payload)
+            self._update_mutate_state()
+        self.listed.emit()
+
+    def _on_list_failed(self, seq: int, msg: str) -> None:
+        if seq != self._list_seq:
             return
-        except ar.ArchiveError as exc:
-            self.error = str(exc)
-            self.status.setText(str(exc))
-            return
-        self._populate()
+        self.is_listing = False
+        self.info = None
+        self.error = msg
+        self.status.setText(msg)
+        self._update_mutate_state()
+        self.listed.emit()
+
+    def _update_mutate_state(self) -> None:
+        """Enable Add/Delete/Rename only for archives 7z can rewrite."""
+        editable = self.info is not None and ar.can_mutate(self.path)
+        for act in self._mutate_actions:
+            act.setEnabled(editable)
 
     def unlock(self) -> None:
         """Ask for a password and retry (an explicit user action)."""
@@ -143,6 +204,9 @@ class ArchiveTab(QWidget):
         self.tree.setSortingEnabled(False)
         self.tree.clear()
         if self.info is None:
+            return
+        if self.flat.isChecked():
+            self._populate_flat()
             return
 
         nodes: dict[str, QTreeWidgetItem] = {}
@@ -184,6 +248,38 @@ class ArchiveTab(QWidget):
 
         self.tree.setSortingEnabled(True)
         self.tree.expandToDepth(0)
+        self._update_status()
+
+    def _populate_flat(self) -> None:
+        """List every file by its full member path, no folders."""
+        assert self.info is not None
+        for entry in sorted(self.info.entries, key=lambda e: e.name):
+            if entry.is_dir:
+                continue
+            item = self._file_item(entry, entry.name)
+            self.tree.addTopLevelItem(item)
+        self.tree.setSortingEnabled(True)
+        self._update_status()
+
+    def _file_item(self, entry: ar.Entry, label: str) -> QTreeWidgetItem:
+        item = QTreeWidgetItem([
+            label,
+            human_size(entry.size),
+            human_size(entry.packed),
+            f"{entry.ratio:.1f}×" if entry.ratio else "",
+            entry.crc,
+            entry.modified.strftime("%Y-%m-%d %H:%M") if entry.modified else "",
+        ])
+        item.setData(0, Qt.ItemDataRole.UserRole, entry.name)
+        item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight)
+        item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight)
+        if entry.encrypted:
+            item.setText(0, f"{label}  🔒")
+        return item
+
+    def _update_status(self) -> None:
+        if self.info is None:
+            return
         if self.info.encrypted and not self.password:
             lock = " · 🔒 encrypted — a password is needed to extract"
         elif self.info.encrypted:
@@ -193,6 +289,12 @@ class ArchiveTab(QWidget):
         self.status.setText(
             f"{self.info.file_count} files · {human_size(self.info.total_size)} "
             f"· {self.info.format}{lock}")
+
+    def show_comment(self) -> None:
+        comment = (self.info.comment if self.info else "").strip()
+        QMessageBox.information(
+            self, "Archive comment",
+            comment or "This archive has no comment.")
 
     def _apply_filter(self, text: str) -> None:
         needle = text.lower().strip()
@@ -305,11 +407,28 @@ class ArchiveTab(QWidget):
         name = item.data(0, Qt.ItemDataRole.UserRole)
         if not name or self.info is None:
             return
-        try:
-            target = ar.extract_one(self.path, name, self._sandbox.path,
-                                    self.password)
-        except Exception:
-            self.preview.setText(name)
+        self.preview.setText("Loading preview…")
+        job = submit(self._preview_work, name, name="preview")
+        self._jobs.append(job)
+        job.signals.finished.connect(
+            lambda target, n=name: self._show_preview(n, target))
+        job.signals.failed.connect(
+            lambda message, _t, n=name: self._preview_failed(n, message))
+
+    def _preview_work(self, _ctx, name: str):
+        return ar.extract_one(self.path, name, self._sandbox.path,
+                              self.password)
+
+    def _preview_failed(self, name: str, message: str) -> None:
+        current = self.tree.currentItem()
+        if current is not None and \
+                current.data(0, Qt.ItemDataRole.UserRole) == name:
+            self.preview.setText(message or name)
+
+    def _show_preview(self, name: str, target) -> None:
+        current = self.tree.currentItem()
+        if current is None or \
+                current.data(0, Qt.ItemDataRole.UserRole) != name:
             return
         from ..core.mime import Kind, detect_kind
         kind = detect_kind(target)
@@ -375,19 +494,26 @@ class ArchiveTab(QWidget):
     def comic_mode(self) -> None:
         if self.info is None:
             return
-        images = [e.name for e in self.info.entries
-                  if not e.is_dir and e.name.lower().endswith(
-                      (".png", ".jpg", ".jpeg", ".webp", ".gif"))]
+        images = sorted(
+            e.name for e in self.info.entries
+            if not e.is_dir and e.name.lower().endswith(
+                (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif")))
         if not images:
             QMessageBox.information(self, "Comic mode", "No images in this archive.")
             return
+        dest = self._sandbox.path / "comic"
         try:
-            target = ar.extract_one(self.path, images[0], self._sandbox.path,
-                                    self.password)
-        except Exception as exc:
+            ar.extract(self.path, dest, images, self.password)
+        except ar.PasswordRequired:
+            if self._ask_password():
+                self.comic_mode()
+            return
+        except (ar.ArchiveError, UnsafePath) as exc:
             QMessageBox.warning(self, "Comic mode", str(exc))
             return
-        self.open_request.emit(str(target))
+        # The images now sit in one folder, so the image tab's next/previous
+        # navigation pages through the whole comic.
+        self.open_request.emit(str(safe_join(dest, images[0])))
 
     def is_modified(self) -> bool:
         return False
@@ -396,8 +522,13 @@ class ArchiveTab(QWidget):
         return True
 
     def cleanup(self) -> None:
+        # A preview/extract job may still be writing into the sandbox; wait for
+        # the pool to drain before deleting it so a late callback can't touch a
+        # freed path or widget.
+        from PyQt6.QtCore import QThreadPool
+        QThreadPool.globalInstance().waitForDone(5000)
         self._sandbox.cleanup()
 
-    def closeEvent(self, a0) -> None:  # noqa: N802
+    def closeEvent(self, a0) -> None:
         self.cleanup()
         super().closeEvent(a0)

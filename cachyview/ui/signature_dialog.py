@@ -41,13 +41,13 @@ class _Pad(QWidget):
     def png(self, path: Path) -> None:
         self.image.save(str(path), "PNG")
 
-    def mousePressEvent(self, a0) -> None:  # noqa: N802
+    def mousePressEvent(self, a0) -> None:
         if a0 is not None:
             self._drawing = True
             self._last = a0.position().toPoint()
             self._stroke = [self._last]
 
-    def mouseMoveEvent(self, a0) -> None:  # noqa: N802
+    def mouseMoveEvent(self, a0) -> None:
         if a0 is None or not self._drawing or self._last is None:
             return
         pos = a0.position().toPoint()
@@ -62,13 +62,13 @@ class _Pad(QWidget):
         self._stroke.append(pos)
         self.update()
 
-    def mouseReleaseEvent(self, a0) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, a0) -> None:
         self._drawing = False
 
     def has_ink(self) -> bool:
         return len(self._stroke) >= 2
 
-    def paintEvent(self, a0) -> None:  # noqa: N802
+    def paintEvent(self, a0) -> None:
         painter = QPainter(self)
         painter.drawImage(0, 0, self.image)
         painter.setPen(QPen(QColor(200, 200, 200), 1,

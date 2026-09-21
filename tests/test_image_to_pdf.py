@@ -33,6 +33,18 @@ def test_ordered_paths_follows_grid(imgs, app):
     assert len(order) == 3
 
 
+def test_rotate_does_not_modify_original(imgs, tmp_path, app):
+    originals = {p: p.read_bytes() for p in imgs}
+    dlg = ImageToPdfDialog(initial=[str(p) for p in imgs])
+    dlg.grid.setCurrentRow(0)
+    dlg._rotate(90)
+    rotated = dlg.ordered_paths()[0]
+    assert rotated != imgs[0]
+    for p, data in originals.items():
+        assert p.read_bytes() == data, "source image must be untouched"
+    dlg.done(0)
+
+
 def test_create_produces_pdf(imgs, tmp_path, app, monkeypatch):
     out = tmp_path / "album.pdf"
     dlg = ImageToPdfDialog(initial=[str(p) for p in imgs])

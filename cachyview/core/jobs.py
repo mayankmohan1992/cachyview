@@ -16,6 +16,7 @@ class JobSignals(QObject):
     finished = pyqtSignal(object)        # result
     failed = pyqtSignal(str, str)        # short message, traceback
     cancelled = pyqtSignal()
+    item = pyqtSignal(object)            # per-item update (e.g. batch rows)
 
 
 class JobContext:
@@ -58,20 +59,47 @@ class Job(QRunnable):
     def cancel(self) -> None:
         self.ctx.cancel()
 
-    def run(self) -> None:  # noqa: D102 - QRunnable entry point
+    def run(self) -> None:
         try:
             result = self._fn(self.ctx, *self._args, **self._kwargs)
         except JobCancelled:
             self.signals.cancelled.emit()
-        except Exception as exc:  # noqa: BLE001 - surfaced to the UI
+        except Exception as exc:
             self.signals.failed.emit(str(exc) or exc.__class__.__name__,
                                      traceback.format_exc())
         else:
             self.signals.finished.emit(result)
 
 
+# Keep every running job alive until it finishes.  A QRunnable handed to the
+# thread pool is owned by C++ from that point; without a Python reference the
+# Job (and its JobSignals QObject) can be garbage-collected mid-run, which
+# crashes the worker when it emits ("wrapped C/C++ object ... has been
+# deleted").  The pool discards the reference on any terminal signal.
+_ACTIVE: "set[Job]" = set()
+
+
+def _retain(job: "Job") -> "Job":
+    _ACTIVE.add(job)
+    for signal in (job.signals.finished, job.signals.failed,
+                   job.signals.cancelled):
+        signal.connect(lambda *_a, j=job: _ACTIVE.discard(j))
+    return job
+
+
 def submit(fn: Callable[..., Any], *args: Any, name: str = "", **kwargs: Any) -> Job:
     """Queue a job on the global pool and return it (for signal wiring/cancel)."""
-    job = Job(fn, *args, name=name, **kwargs)
+    job = _retain(Job(fn, *args, name=name, **kwargs))
+    QThreadPool.globalInstance().start(job)
+    return job
+
+
+def make_job(fn: Callable[..., Any], *args: Any, name: str = "", **kwargs: Any) -> Job:
+    """Build a job without starting it, so signals can be wired first."""
+    return _retain(Job(fn, *args, name=name, **kwargs))
+
+
+def start_job(job: Job) -> Job:
+    """Start a previously built :func:`make_job` on the global thread pool."""
     QThreadPool.globalInstance().start(job)
     return job

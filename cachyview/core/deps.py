@@ -23,7 +23,7 @@ class Dep:
 
 DEPS: tuple[Dep, ...] = (
     Dep("pyqt6", "py", "PyQt6", "python-pyqt6", "GUI toolkit", required=True),
-    Dep("fitz", "py", "fitz", "python-pymupdf", "PDF rendering and editing"),
+    Dep("pymupdf", "py", "pymupdf", "python-pymupdf", "PDF rendering and editing"),
     Dep("pikepdf", "py", "pikepdf", "python-pikepdf", "lossless PDF structure ops"),
     Dep("pillow", "py", "PIL", "python-pillow", "image loading and editing", required=True),
     Dep("pygments", "py", "pygments", "python-pygments", "syntax highlighting"),
@@ -40,6 +40,12 @@ DEPS: tuple[Dep, ...] = (
     Dep("cwebp", "bin", "cwebp", "libwebp", "WebP encoding"),
     Dep("oxipng", "bin", "oxipng", "oxipng", "lossless PNG optimisation"),
     Dep("jpegoptim", "bin", "jpegoptim", "jpegoptim", "lossless JPEG optimisation"),
+    Dep("pillow_heif", "py", "pillow_heif", "python-pillow-heif", "HEIC/HEIF decoding"),
+    Dep("pillow_avif", "py", "pillow_avif", "python-pillow-avif", "AVIF decoding"),
+    Dep("pillow_jxl", "py", "pillow_jxl", "python-pillow-jxl", "JPEG XL decoding"),
+    Dep("rawpy", "py", "rawpy", "python-rawpy", "camera RAW decoding"),
+    Dep("lz4", "py", "lz4", "python-lz4", "LZ4 archive streams"),
+    Dep("yaml", "py", "yaml", "python-yaml", "YAML formatting and validation"),
 )
 
 BY_KEY = {d.key: d for d in DEPS}
@@ -52,10 +58,20 @@ def have(key: str) -> bool:
         return False
     if dep.kind == "bin":
         return shutil.which(dep.probe) is not None
-    try:
-        return importlib.util.find_spec(dep.probe) is not None
-    except (ImportError, ValueError):
-        return False
+    # PyMuPDF is importable as `pymupdf` on recent versions and only as the
+    # legacy `fitz` shim on older ones; accept either.
+    probes = (dep.probe, "fitz") if dep.probe == "pymupdf" else (dep.probe,)
+    for probe in probes:
+        try:
+            if importlib.util.find_spec(probe) is None:
+                continue
+            # A module can be present but fail to import (e.g. PyMuPDF's native
+            # libmupdf was removed by a partial upgrade).  Treat that as missing.
+            importlib.import_module(probe)
+        except (ImportError, ValueError, OSError):
+            continue
+        return True
+    return False
 
 
 def missing(required_only: bool = False) -> list[Dep]:

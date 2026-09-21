@@ -199,6 +199,35 @@ def cmd_pdf(args) -> int:
         elif args.action == "repair":
             out = Path(args.output) if args.output else output_path(src, "repaired")
             pb.repair(src, out, password=args.password)
+        elif args.action == "nup":
+            out = Path(args.output) if args.output else output_path(
+                src, f"nup-{args.per_sheet}")
+            pb.nup(src, out, per_sheet=args.per_sheet, password=args.password)
+        elif args.action == "booklet":
+            out = Path(args.output) if args.output else output_path(src, "booklet")
+            pb.booklet(src, out, password=args.password)
+        elif args.action == "linearize":
+            out = Path(args.output) if args.output else output_path(src, "linearized")
+            pb.linearize(src, out, password=args.password)
+        elif args.action == "to-html":
+            out = Path(args.output) if args.output else output_path(src, "html", ".html")
+            pb.to_html(src, out, password=args.password)
+        elif args.action == "to-docx":
+            dest = Path(args.output) if args.output else src.parent
+            target = pb.to_docx(src, dest, password=args.password)
+            print(f"Wrote {target}")
+            _notify("PDF to Word", target.name)
+            return 0
+        elif args.action == "to-pdfa":
+            out = Path(args.output) if args.output else output_path(
+                src, f"pdfa-{args.pdfa_level}")
+            pb.to_pdfa(src, out, level=args.pdfa_level, password=args.password)
+        elif args.action == "watermark":
+            if not args.text and not args.image:
+                return _print_err("watermark needs --text and/or --image")
+            out = Path(args.output) if args.output else output_path(src, "watermarked")
+            pb.watermark(src, out, text=args.text, image=args.image,
+                         password=args.password)
         elif args.action == "info":
             info = pb.info(src, args.password)
             print(f"{src.name}: {info.page_count} pages, "
@@ -259,6 +288,29 @@ def cmd_image(args) -> int:
 
 
 # --------------------------------------------------------------------------
+# thumbnails (KDE thumbnailer entry point)
+# --------------------------------------------------------------------------
+
+def cmd_thumbnail(args) -> int:
+    """Render a single thumbnail image.  Used by the KDE thumbnailer."""
+    from ..core.mime import Kind, detect_kind
+    src = Path(args.input)
+    dest = Path(args.output)
+    size = max(16, int(args.size or 256))
+    try:
+        if detect_kind(src) == Kind.PDF:
+            from ..backends import pdf as pb
+            pb.render_thumbnail(src, dest, size=size)
+        else:
+            from ..backends import image as ib
+            img = ib.apply_ops(ib.load(src), [ib.Op("thumbnail", {"size": size})])
+            ib.save(img, dest, source=img)
+    except Exception as exc:
+        return _print_err(str(exc))
+    return 0
+
+
+# --------------------------------------------------------------------------
 # parser
 # --------------------------------------------------------------------------
 
@@ -304,13 +356,20 @@ def build_parser() -> argparse.ArgumentParser:
     pdf.add_argument("action", choices=[
         "merge", "split", "compress", "rotate", "extract-pages", "delete-pages",
         "protect", "unlock", "ocr", "to-images", "to-text", "from-images",
-        "repair", "info"])
+        "repair", "nup", "booklet", "linearize", "to-html", "watermark",
+        "to-docx", "to-pdfa", "info"])
     pdf.add_argument("files", nargs="+")
     pdf.add_argument("-o", "--output")
     pdf.add_argument("-p", "--password")
     pdf.add_argument("--pages", help="page range, e.g. 1-3,7")
     pdf.add_argument("--every", type=int, default=1, help="pages per split file")
     pdf.add_argument("--angle", type=int, default=90)
+    pdf.add_argument("--per-sheet", type=int, default=2, dest="per_sheet",
+                     choices=[2, 4, 6, 9], help="N-up pages per sheet")
+    pdf.add_argument("--pdfa-level", type=int, default=2, dest="pdfa_level",
+                     choices=[1, 2, 3], help="PDF/A conformance level")
+    pdf.add_argument("--text", help="watermark text")
+    pdf.add_argument("--image", help="watermark image path")
     pdf.add_argument("--tier", default="ebook",
                      choices=["screen", "ebook", "printer", "prepress"])
     pdf.add_argument("--dpi", type=int, default=150)
@@ -327,6 +386,12 @@ def build_parser() -> argparse.ArgumentParser:
     img.add_argument("--rotate", type=int)
     img.add_argument("--grayscale", action="store_true")
     img.set_defaults(func=cmd_image)
+
+    th = sub.add_parser("thumbnail", help="render a thumbnail (KDE thumbnailer)")
+    th.add_argument("input")
+    th.add_argument("output")
+    th.add_argument("--size", type=int, default=256)
+    th.set_defaults(func=cmd_thumbnail)
 
     return parser
 

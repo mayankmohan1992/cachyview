@@ -105,7 +105,7 @@ class _Worker(QRunnable):
         self._loader = loader
         self.setAutoDelete(True)
 
-    def run(self) -> None:      # noqa: D102 - QRunnable entry point
+    def run(self) -> None:
         loader = self._loader
         doc = None
         try:

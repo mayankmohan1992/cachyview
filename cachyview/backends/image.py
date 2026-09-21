@@ -7,6 +7,7 @@ file is never touched until an explicit save.
 """
 from __future__ import annotations
 
+import importlib
 import io
 import os
 import subprocess
@@ -29,6 +30,76 @@ SAVE_FORMATS = {
 
 # Formats without an alpha channel: RGBA must be flattened before saving.
 NO_ALPHA = {"JPEG", "BMP", "PPM", "PDF"}
+
+# Optional Pillow plugins.  Extension -> (module, registration callable);
+# importing the module and calling the callable teaches Pillow the format.
+_OPTIONAL_DECODERS: dict[str, tuple[str, str]] = {
+    ".heic": ("pillow_heif", "register_heif_opener"),
+    ".heif": ("pillow_heif", "register_heif_opener"),
+    ".avif": ("pillow_avif", "register_avif_opener"),
+    ".jxl": ("pillow_jxl", "register_jxl"),
+}
+
+# Camera-RAW formats decoded through rawpy (not a Pillow plugin).
+_RAW_EXTS = {".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".rw2", ".raf", ".pef"}
+
+# Extension -> (fallback package, human format name) for the error hint.
+_FORMAT_HINT: dict[str, tuple[str, str]] = {
+    ".heic": ("python-pillow-heif", "HEIC/HEIF"),
+    ".heif": ("python-pillow-heif", "HEIC/HEIF"),
+    ".avif": ("python-pillow-avif", "AVIF"),
+    ".jxl": ("python-pillow-jxl", "JPEG XL"),
+    ".cr2": ("python-rawpy", "camera RAW"),
+    ".cr3": ("python-rawpy", "camera RAW"),
+    ".nef": ("python-rawpy", "camera RAW"),
+    ".arw": ("python-rawpy", "camera RAW"),
+    ".dng": ("python-rawpy", "camera RAW"),
+    ".orf": ("python-rawpy", "camera RAW"),
+    ".rw2": ("python-rawpy", "camera RAW"),
+    ".raf": ("python-rawpy", "camera RAW"),
+    ".pef": ("python-rawpy", "camera RAW"),
+}
+
+_decoder_failed: set[str] = set()
+
+
+def _register_decoder(suffix: str) -> bool:
+    """Try to enable the optional decoder for *suffix*.  Cached on failure."""
+    spec = _OPTIONAL_DECODERS.get(suffix)
+    if spec is None or suffix in _decoder_failed:
+        return False
+    module_name, func_name = spec
+    try:
+        module = importlib.import_module(module_name)
+        func = getattr(module, func_name, None)
+        if callable(func):
+            func()
+        return True
+    except Exception:
+        _decoder_failed.add(suffix)
+        return False
+
+
+def _load_raw(path: Path) -> "Image.Image | None":
+    """Decode a camera-RAW file with rawpy if it is installed."""
+    try:
+        import rawpy
+    except ImportError:
+        return None
+    try:
+        with rawpy.imread(str(path)) as raw:
+            return Image.fromarray(raw.postprocess())
+    except Exception as exc:
+        raise ImageError(f"Cannot decode RAW image {path.name}: {exc}") from exc
+
+
+def _unsupported_hint(suffix: str) -> str:
+    hint = _FORMAT_HINT.get(suffix)
+    if hint is None:
+        return ""
+    package, name = hint
+    return (f" — {name} support needs an optional package; install it with: "
+            f"paru -S --needed {package}")
 
 
 class ImageError(Exception):
@@ -64,6 +135,12 @@ class ImageInfo:
 def load(path: str | os.PathLike) -> Image.Image:
     """Open an image, applying EXIF orientation so it appears upright."""
     p = Path(path)
+    suffix = p.suffix.lower()
+    _register_decoder(suffix)
+    if suffix in _RAW_EXTS:
+        raw = _load_raw(p)
+        if raw is not None:
+            return raw
     try:
         img = Image.open(p)
         img.load()
@@ -72,7 +149,8 @@ def load(path: str | os.PathLike) -> Image.Image:
     except Image.DecompressionBombError as exc:
         raise ImageError(f"Image is too large to open safely: {exc}") from exc
     except (OSError, ValueError) as exc:
-        raise ImageError(f"Cannot open {p.name}: {exc}") from exc
+        raise ImageError(f"Cannot open {p.name}: {exc}"
+                         f"{_unsupported_hint(suffix)}") from exc
     try:
         return ImageOps.exif_transpose(img)
     except (OSError, ValueError, TypeError):
@@ -90,6 +168,7 @@ _EXIF_INTEREST = {
 def info(path: str | os.PathLike) -> ImageInfo:
     """Read dimensions, format and a digest of EXIF without decoding pixels."""
     p = Path(path)
+    _register_decoder(p.suffix.lower())
     try:
         with Image.open(p) as img:
             exif: dict[str, Any] = {}
@@ -113,7 +192,8 @@ def info(path: str | os.PathLike) -> ImageInfo:
     except FileNotFoundError as exc:
         raise ImageError(f"No such file: {p}") from exc
     except (OSError, ValueError) as exc:
-        raise ImageError(f"Cannot read {p.name}: {exc}") from exc
+        raise ImageError(f"Cannot read {p.name}: {exc}"
+                         f"{_unsupported_hint(p.suffix.lower())}") from exc
 
 
 # --------------------------------------------------------------------------
@@ -158,8 +238,21 @@ def _op_crop(img: Image.Image, *, box: tuple[int, int, int, int]) -> Image.Image
     return img.crop((left, top, right, bottom))
 
 
+_RESAMPLE = {
+    "lanczos": Image.Resampling.LANCZOS,
+    "bicubic": Image.Resampling.BICUBIC,
+    "bilinear": Image.Resampling.BILINEAR,
+    "nearest": Image.Resampling.NEAREST,
+}
+
+
+def _resampling(name: str | None) -> Image.Resampling:
+    return _RESAMPLE.get((name or "lanczos").lower(), Image.Resampling.LANCZOS)
+
+
 def _op_resize(img: Image.Image, *, width: int | None = None,
-               height: int | None = None, keep_aspect: bool = True) -> Image.Image:
+               height: int | None = None, keep_aspect: bool = True,
+               resample: str = "lanczos") -> Image.Image:
     if not width and not height:
         return img
     if keep_aspect:
@@ -173,15 +266,16 @@ def _op_resize(img: Image.Image, *, width: int | None = None,
             height = max(1, round(img.height * scale))
     final_w = int(width) if width else img.width
     final_h = int(height) if height else img.height
-    return img.resize((final_w, final_h), Image.Resampling.LANCZOS)
+    return img.resize((final_w, final_h), _resampling(resample))
 
 
-def _op_scale(img: Image.Image, *, factor: float = 1.0) -> Image.Image:
+def _op_scale(img: Image.Image, *, factor: float = 1.0,
+              resample: str = "lanczos") -> Image.Image:
     if factor <= 0:
         raise ImageError("Scale factor must be positive.")
     return img.resize((max(1, round(img.width * factor)),
                        max(1, round(img.height * factor))),
-                      Image.Resampling.LANCZOS)
+                      _resampling(resample))
 
 
 def _enhance(cls: type, img: Image.Image, value: float) -> Image.Image:
@@ -349,6 +443,112 @@ def _op_equalize(img: Image.Image) -> Image.Image:
     return _merge_alpha(ImageOps.equalize(rgb), alpha)
 
 
+def _levels_lut(black: float, white: float, gamma: float,
+                out_black: float, out_white: float) -> list[int]:
+    black_i = max(0, min(254, int(black)))
+    white_i = max(black_i + 1, min(255, int(white)))
+    gamma_f = max(0.01, min(10.0, float(gamma)))
+    lo = max(0, min(255, int(out_black)))
+    hi = max(0, min(255, int(out_white)))
+    lut = []
+    for i in range(256):
+        if i <= black_i:
+            norm = 0.0
+        elif i >= white_i:
+            norm = 1.0
+        else:
+            norm = (i - black_i) / (white_i - black_i)
+        norm = norm ** (1.0 / gamma_f)
+        lut.append(max(0, min(255, int(lo + norm * (hi - lo) + 0.5))))
+    return lut
+
+
+def _op_levels(img: Image.Image, *, black: float = 0, white: float = 255,
+               gamma: float = 1.0, out_black: float = 0,
+               out_white: float = 255) -> Image.Image:
+    """Remap input tones between *black*/*white* with an optional *gamma*."""
+    lut = _levels_lut(black, white, gamma, out_black, out_white)
+    rgb, alpha = _split_alpha(img)
+    return _merge_alpha(rgb.point(lut * 3), alpha)
+
+
+def _curve_lut(points: list[tuple[int, int]]) -> list[int]:
+    pts = sorted((max(0, min(255, int(x))), max(0, min(255, int(y))))
+                 for x, y in points)
+    if len(pts) < 2:
+        raise ImageError("A curve needs at least two control points.")
+    if pts[0][0] != 0:
+        pts.insert(0, (0, pts[0][1]))
+    if pts[-1][0] != 255:
+        pts.append((255, pts[-1][1]))
+    lut = []
+    for i in range(256):
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if i <= x1 or x1 == pts[-1][0]:
+                if x1 == x0:
+                    lut.append(max(0, min(255, y1)))
+                else:
+                    t = (i - x0) / (x1 - x0)
+                    lut.append(max(0, min(255, int(y0 + t * (y1 - y0) + 0.5))))
+                break
+    return lut
+
+
+def _op_curves(img: Image.Image, *, points: list[tuple[int, int]] | None = None,
+               channel: str = "rgb") -> Image.Image:
+    """Tone curve through *points* (input, output) in 0..255, per channel or RGB."""
+    lut = _curve_lut(list(points or [(0, 0), (255, 255)]))
+    rgb, alpha = _split_alpha(img)
+    ch = (channel or "rgb").lower()
+    if ch in ("r", "g", "b"):
+        r, g, b = rgb.split()
+        target = {"r": r, "g": g, "b": b}[ch].point(lut)
+        parts: dict[str, Image.Image] = {"r": r, "g": g, "b": b}
+        parts[ch] = target
+        rgb = Image.merge("RGB", (parts["r"], parts["g"], parts["b"]))
+    else:
+        rgb = rgb.point(lut * 3)
+    return _merge_alpha(rgb, alpha)
+
+
+def _op_redeye(img: Image.Image, *, box: tuple[int, int, int, int] | None = None,
+               threshold: float = 1.5, strength: float = 0.85) -> Image.Image:
+    """Desaturate red pupils inside *box*; red wins where R > threshold·max(G,B)."""
+    rgb, alpha = _split_alpha(img)
+    if box is None:
+        region = rgb.copy()
+        offset = (0, 0)
+    else:
+        left, top, right, bottom = (int(v) for v in box)
+        left, top = max(0, left), max(0, top)
+        right, bottom = min(rgb.width, right), min(rgb.height, bottom)
+        if right <= left or bottom <= top:
+            return _merge_alpha(rgb, alpha)
+        region = rgb.crop((left, top, right, bottom))
+        offset = (left, top)
+    thr = max(1.0, float(threshold))
+    keep = max(0.0, min(1.0, float(strength)))
+    get_data = getattr(region, "get_flattened_data", None) or region.getdata
+    data = list(get_data())
+    out: list[tuple[int, int, int]] = []
+    changed = False
+    for r, g, b in data:
+        other = g if g > b else b
+        if r > 40 and r > other * thr:
+            target = (g + b) // 2
+            out.append((int(r * (1 - keep) + target * keep), g, b))
+            changed = True
+        else:
+            out.append((r, g, b))
+    if changed:
+        region.putdata(out)
+        if offset != (0, 0):
+            rgb.paste(region, offset)
+        else:
+            rgb = region
+    return _merge_alpha(rgb, alpha)
+
+
 def _op_unsharp(img: Image.Image, *, radius: float = 2.0,
                 percent: int = 150, threshold: int = 3) -> Image.Image:
     return img.filter(ImageFilter.UnsharpMask(
@@ -512,6 +712,98 @@ def load_frames(path: str | os.PathLike) -> list[Image.Image]:
     return frames or [load(p)]
 
 
+def _anchor_position(size: tuple[int, int], item: tuple[int, int],
+                     position: str, margin: int) -> tuple[int, int]:
+    iw, ih = item
+    bw, bh = size
+    p = position.lower()
+    if "left" in p:
+        x = margin
+    elif "right" in p:
+        x = bw - iw - margin
+    else:
+        x = (bw - iw) // 2
+    if "top" in p:
+        y = margin
+    elif "bottom" in p:
+        y = bh - ih - margin
+    else:
+        y = (bh - ih) // 2
+    return max(0, x), max(0, y)
+
+
+def _load_font(size: int):
+    from PIL import ImageFont
+    for name in ("DejaVuSans.ttf", "LiberationSans-Regular.ttf", "Arial.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except (OSError, ValueError):
+            continue
+    return ImageFont.load_default()
+
+
+def _rgba(color: str, opacity: float) -> tuple[int, int, int, int]:
+    c = color.lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    try:
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    except (ValueError, IndexError):
+        r = g = b = 255
+    return (r, g, b, int(max(0.0, min(1.0, opacity)) * 255))
+
+
+def _op_watermark(img: Image.Image, *, image: str | None = None,
+                  text: str | None = None, position: str = "bottom-right",
+                  opacity: float = 0.5, scale: float = 0.2,
+                  margin: int = 16, color: str = "#ffffff",
+                  size: int = 32) -> Image.Image:
+    """Overlay an image and/or a text watermark.  Non-destructive."""
+    base = img.convert("RGBA")
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    alpha = max(0.0, min(1.0, opacity))
+    if image:
+        try:
+            mark = Image.open(image).convert("RGBA")
+        except (OSError, ValueError) as exc:
+            raise ImageError(f"Cannot open watermark image: {exc}") from exc
+        target_w = max(8, int(base.width * max(0.01, min(1.0, scale))))
+        if mark.width > target_w:
+            mark = mark.resize(
+                (target_w, max(1, round(mark.height * target_w / mark.width))),
+                Image.Resampling.LANCZOS)
+        mark.putalpha(mark.getchannel("A").point(
+            lambda v: int(v * alpha)))
+        x, y = _anchor_position(base.size, mark.size, position, margin)
+        overlay.alpha_composite(mark, (x, y))
+    if text:
+        draw = ImageDraw.Draw(overlay)
+        font = _load_font(size)
+        box = draw.textbbox((0, 0), text, font=font)
+        tw, th = box[2] - box[0], box[3] - box[1]
+        x, y = _anchor_position(base.size, (tw, th), position, margin)
+        draw.text((x - box[0], y - box[1]), text, font=font,
+                  fill=_rgba(color, alpha))
+    return Image.alpha_composite(base, overlay).convert(img.mode)
+
+
+def frame_durations(path: str | os.PathLike) -> list[int]:
+    """Per-frame display duration in milliseconds (GIF/WebP/APNG)."""
+    durations: list[int] = []
+    try:
+        with Image.open(path) as img:
+            n = getattr(img, "n_frames", 1) or 1
+            for i in range(n):
+                try:
+                    img.seek(i)
+                except EOFError:
+                    break
+                durations.append(max(20, int(img.info.get("duration", 100) or 100)))
+    except (OSError, ValueError):
+        return []
+    return durations
+
+
 OPS: dict[str, Callable[..., Image.Image]] = {
     "rotate": _op_rotate,
     "flip": _op_flip,
@@ -539,6 +831,9 @@ OPS: dict[str, Callable[..., Image.Image]] = {
     "posterize": _op_posterize,
     "solarize": _op_solarize,
     "equalize": _op_equalize,
+    "levels": _op_levels,
+    "curves": _op_curves,
+    "redeye": _op_redeye,
     "unsharp": _op_unsharp,
     "median": _op_median,
     "smooth": _op_smooth,
@@ -552,6 +847,7 @@ OPS: dict[str, Callable[..., Image.Image]] = {
     "straighten": _op_straighten,
     "canvas": _op_canvas,
     "draw": _op_draw,
+    "watermark": _op_watermark,
 }
 
 
@@ -615,7 +911,7 @@ def save(img: Image.Image, path: str | os.PathLike, *, quality: int = 92,
         params["progressive"] = True
     if keep_exif:
         exif = (source or img).info.get("exif")
-        if exif and fmt in ("JPEG", "WEBP", "TIFF"):
+        if exif and fmt in ("JPEG", "WEBP", "TIFF", "PNG"):
             params["exif"] = exif
 
     tmp = p.with_name(p.name + ".cachyview.tmp")

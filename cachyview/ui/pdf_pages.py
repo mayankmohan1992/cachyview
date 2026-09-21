@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPixmap, QWheelEvent
-from PyQt6.QtWidgets import QApplication, QScrollArea, QWidget
+from PyQt6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import (QColor, QDesktopServices, QImage, QMouseEvent,
+                         QPainter, QPen, QPixmap, QWheelEvent)
+from PyQt6.QtWidgets import QApplication, QMessageBox, QScrollArea, QWidget
 
 from ..backends import pdf as pb
 
@@ -39,16 +40,16 @@ class _Canvas(QWidget):
         self._view = view
         self.setMouseTracking(True)
 
-    def paintEvent(self, a0) -> None:  # noqa: N802
+    def paintEvent(self, a0) -> None:
         self._view.paint_canvas(self, a0)
 
-    def mousePressEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mousePressEvent(self, a0: QMouseEvent | None) -> None:
         self._view.on_mouse_press(a0)
 
-    def mouseMoveEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mouseMoveEvent(self, a0: QMouseEvent | None) -> None:
         self._view.on_mouse_move(a0)
 
-    def mouseReleaseEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, a0: QMouseEvent | None) -> None:
         self._view.on_mouse_release(a0)
 
 
@@ -66,11 +67,13 @@ class ContinuousPdfView(QScrollArea):
         self.setWidget(self.canvas)
         self.zoom = 1.0
         self.layout_mode = CONTINUOUS
+        self.invert = False
         self._current = 1
         self._info: pb.PdfInfo | None = None
         self._geoms: list[PageRect] = []
         self._pixmaps: dict[int, tuple[QPixmap, int]] = {}
         self._words: dict[int, list] = {}
+        self._links: dict[int, list] = {}
         self._sel_page: int | None = None
         self._sel_start: QPoint | None = None
         self._sel_words: list[tuple] = []
@@ -93,6 +96,7 @@ class ContinuousPdfView(QScrollArea):
         self._current = 1
         self._pixmaps.clear()
         self._words.clear()
+        self._links.clear()
         self._sel_words = []
         self._rebuild()
         QTimer.singleShot(0, self._request_visible)
@@ -133,8 +137,20 @@ class ContinuousPdfView(QScrollArea):
     def show_pixmap(self, page: int, pixmap: QPixmap, dpi: int) -> None:
         dpr = float(self.devicePixelRatioF() or 1.0)
         pixmap.setDevicePixelRatio(dpr)
+        if self.invert:
+            image = pixmap.toImage()
+            image.invertPixels(QImage.InvertMode.InvertRgb)
+            pixmap = QPixmap.fromImage(image)
+            pixmap.setDevicePixelRatio(dpr)
         self._pixmaps[page] = (pixmap, dpi)
         self.canvas.update()
+
+    def set_invert(self, on: bool) -> None:
+        """Invert rendered colours for dark-mode reading (view only)."""
+        self.invert = bool(on)
+        self._pixmaps.clear()
+        self.canvas.update()
+        self._request_visible()
 
     def has_pixmap(self, page: int) -> bool:
         got = self._pixmaps.get(page)
@@ -271,15 +287,15 @@ class ContinuousPdfView(QScrollArea):
                 for g in self._geoms[1:3]:
                     self.need_render.emit(g.number, dpi)
 
-    def showEvent(self, a0) -> None:  # noqa: N802
+    def showEvent(self, a0) -> None:
         super().showEvent(a0)
         self._request_visible()
 
-    def resizeEvent(self, a0) -> None:  # noqa: N802
+    def resizeEvent(self, a0) -> None:
         super().resizeEvent(a0)
         self._timer.start()
 
-    def wheelEvent(self, a0: QWheelEvent | None) -> None:  # noqa: N802
+    def wheelEvent(self, a0: QWheelEvent | None) -> None:
         if a0 is None:
             return
         if a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -395,8 +411,53 @@ class ContinuousPdfView(QScrollArea):
                 QApplication.clipboard().setText(text)
                 if hasattr(tab, "status"):
                     tab.status.setText(f"Copied {len(self._sel_words)} word(s).")
+            else:
+                # A plain click (no selection) may land on a link.
+                self._open_link_at(a0.position().toPoint())
         self._sel_start = None
         self.canvas.update()
+
+    def _open_link_at(self, pt: QPoint) -> None:
+        """Activate a link under *pt*, confirming before opening a URI."""
+        path = getattr(self.tab, "path", None)
+        if path is None or self._info is None:
+            return
+        hit = self.hit_test(pt.x(), pt.y())
+        if hit is None:
+            return
+        page, pdf_x, pdf_y, _g = hit
+        links = self._links.get(page)
+        if links is None:
+            try:
+                links = pb.links(path, page,
+                                 getattr(self.tab, "password", None))
+            except pb.PdfError:
+                links = []
+            self._links[page] = links
+        for link in links:
+            x0, y0, x1, y1 = link["rect"]
+            if x0 <= pdf_x <= x1 and y0 <= pdf_y <= y1:
+                self._activate_link(link)
+                return
+
+    def _activate_link(self, link: dict) -> None:
+        if link.get("kind") == "page":
+            self.scroll_to(link["page"])
+            return
+        uri = link.get("uri", "")
+        scheme = uri.split(":", 1)[0].lower() if ":" in uri else ""
+        if scheme not in ("http", "https", "mailto", "file"):
+            QMessageBox.warning(
+                self, "Blocked link",
+                f"Refusing to open a '{scheme or 'unknown'}' link.")
+            return
+        reply = QMessageBox.question(
+            self, "Open external link?",
+            f"Open this link in your browser?\n\n{uri}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            QDesktopServices.openUrl(QUrl(uri))
 
     def _ensure_words(self, page: int) -> None:
         if page in self._words:

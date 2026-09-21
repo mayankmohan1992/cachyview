@@ -65,3 +65,25 @@ def test_dialog_move_reorders(pdf_file, app):
     first_title = dlg.list.item(0).data(Qt.ItemDataRole.UserRole)["title"]
     assert first_title == "Second"
     dlg.close()
+
+
+def test_dialog_loads_selected_into_fields(pdf_file, app):
+    dlg = OutlineDialog(pdf_file)
+    dlg._add_row("Chapter", 2, 1)
+    dlg.list.setCurrentRow(0)
+    assert dlg._title.text() == "Chapter"
+    assert dlg._page.value() == 2
+    assert dlg._level.value() == 1
+    dlg.close()
+
+
+def test_dialog_update_edits_row(pdf_file, app):
+    dlg = OutlineDialog(pdf_file)
+    dlg._add_row("Draft", 1, 0)
+    dlg.list.setCurrentRow(0)
+    dlg._update("Final", 2, 1)
+    dlg._save()
+    items = pb.get_outline(pdf_file)
+    assert [(i["title"], i["page"], i["level"]) for i in items] == [
+        ("Final", 2, 1)]
+    dlg.close()

@@ -1,7 +1,7 @@
 """Draw markup on an image (Preview-style), recorded as image-space points."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QInputDialog, QWidget
 
@@ -34,7 +34,7 @@ class MarkupOverlay(QWidget):
             self.raise_()
         self.update()
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
+    def mousePressEvent(self, event) -> None:
         if event is None or self.mode == "off":
             return
         self._start = event.pos()
@@ -48,7 +48,7 @@ class MarkupOverlay(QWidget):
             self._start = None
         self.update()
 
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+    def mouseMoveEvent(self, event) -> None:
         if event is None or self._start is None:
             return
         self._now = event.pos()
@@ -56,7 +56,7 @@ class MarkupOverlay(QWidget):
             self._free.append(event.pos())
         self.update()
 
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, event) -> None:
         if self._start is None or event is None:
             return
         end = event.pos()
@@ -76,7 +76,7 @@ class MarkupOverlay(QWidget):
     def _to_image(self, pos: QPoint) -> tuple[int, int]:
         return (int(pos.x() / self._zoom), int(pos.y() / self._zoom))
 
-    def paintEvent(self, event) -> None:  # noqa: N802
+    def paintEvent(self, event) -> None:
         if self._start is None or self._now is None:
             return
         painter = QPainter(self)

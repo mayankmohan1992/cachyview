@@ -51,6 +51,51 @@ def test_output_dir_is_respected(workdir, tmp_path):
     assert len(list(out.glob("*.png"))) == 3
 
 
+def test_in_place_batch_keeps_backup(workdir):
+    """Overwriting in place must leave a ``name~`` recovery copy."""
+    original = (workdir / "img0.png").read_bytes()
+    job = b.BatchJob("t", [{"tool": "grayscale"}])
+    job.add_file(workdir / "img0.png")
+    b.run_batch(job)
+    backup = workdir / "img0.png~"
+    assert backup.exists(), "in-place batch must back up the original"
+    assert backup.read_bytes() == original
+
+
+def test_output_dir_batch_makes_no_backup(workdir, tmp_path):
+    job = b.BatchJob("t", [{"tool": "grayscale"}], output_dir=tmp_path / "out")
+    job.add_file(workdir / "img0.png")
+    b.run_batch(job)
+    assert not (workdir / "img0.png~").exists()
+
+
+def test_rename_pattern_applies(tmp_path):
+    src = tmp_path / "photo.png"
+    Image.new("RGB", (20, 20)).save(src)
+    original = src.read_bytes()
+    job = b.BatchJob("t", [{"tool": "grayscale"}],
+                     rename_pattern="{name}_edited{ext}")
+    job.add_file(src)
+    b.run_batch(job)
+    assert job.items[0].status == "done"
+    assert (tmp_path / "photo_edited.png").exists()
+    # Renaming writes a new file and leaves the original untouched.
+    assert src.read_bytes() == original
+
+
+def test_rename_pattern_index_token(tmp_path):
+    out = tmp_path / "out"
+    job = b.BatchJob("t", [{"tool": "grayscale"}], output_dir=out,
+                     rename_pattern="item_{n}{ext}")
+    for i in range(2):
+        p = tmp_path / f"a{i}.png"
+        Image.new("RGB", (20, 20)).save(p)
+        job.add_file(p)
+    b.run_batch(job)
+    assert (out / "item_1.png").exists()
+    assert (out / "item_2.png").exists()
+
+
 def test_one_bad_file_does_not_stop_the_batch(workdir):
     job = b.BatchJob("t", [{"tool": "rotate", "angle": 90}])
     job.add_file(workdir / "img0.png")

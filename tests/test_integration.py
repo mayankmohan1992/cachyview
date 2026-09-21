@@ -218,20 +218,29 @@ def fake_home(tmp_path, monkeypatch):
 
 def test_install_creates_files(fake_home):
     written = desktop.install("cachyview", "cachyview-cli", refresh=False)
-    assert len(written) == 5
+    assert len(written) == len(desktop.paths())
     assert all(p.is_file() for p in written)
-    assert (fake_home / "applications" / "cachyview.desktop").is_file()
+    assert (fake_home / "applications" / "org.cachyview.CachyView.desktop").is_file()
     menus = fake_home / "kio" / "servicemenus"
-    assert len(list(menus.glob("cachyview-*.desktop"))) == 3
+    assert len(list(menus.glob("cachyview-*.desktop"))) == 4
+    assert (fake_home / "thumbnailers" / "cachyview.thumbnailer").is_file()
+    assert (fake_home / "metainfo" / "org.cachyview.CachyView.metainfo.xml").is_file()
 
 
 def test_desktop_entry_is_valid(fake_home):
     desktop.install(refresh=False)
-    text = (fake_home / "applications" / "cachyview.desktop").read_text()
+    text = (fake_home / "applications" / "org.cachyview.CachyView.desktop").read_text()
     assert text.startswith("[Desktop Entry]")
     assert "Exec=" in text and "MimeType=" in text
     assert "application/pdf" in text
     assert "application/zip" in text
+
+
+def test_generic_and_thumbnailer_entries():
+    assert "all/allfiles" in desktop.any_menu("cachyview")
+    thumb = desktop.thumbnailer_entry("cachyview-cli")
+    assert thumb.startswith("[Thumbnailer Entry]")
+    assert "thumbnail %i %o" in thumb
 
 
 def test_service_menus_are_executable(fake_home):
@@ -267,7 +276,7 @@ def test_every_action_has_a_definition(fake_home):
 def test_uninstall_removes_everything(fake_home):
     desktop.install(refresh=False)
     removed = desktop.uninstall(refresh=False)
-    assert len(removed) == 5
+    assert len(removed) == len(desktop.paths())
     assert not any(p.exists() for p in desktop.paths().values())
     assert desktop.uninstall(refresh=False) == []
 
@@ -285,7 +294,45 @@ def test_status_reflects_state(fake_home):
                     reason="needs desktop-file-utils")
 def test_desktop_files_pass_validator(fake_home):
     desktop.install(refresh=False)
-    entry = fake_home / "applications" / "cachyview.desktop"
+    entry = fake_home / "applications" / "org.cachyview.CachyView.desktop"
     res = subprocess.run(["desktop-file-validate", str(entry)],
                          capture_output=True, text=True)
     assert res.returncode == 0, res.stdout + res.stderr
+
+
+@pytest.mark.skipif(not subprocess.run(["which", "appstreamcli"],
+                                       capture_output=True).returncode == 0,
+                    reason="needs appstream")
+def test_metainfo_passes_appstream_validation(fake_home):
+    desktop.install(refresh=False)
+    meta = fake_home / "metainfo" / "org.cachyview.CachyView.metainfo.xml"
+    res = subprocess.run(["appstreamcli", "validate", str(meta)],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "org.cachyview.CachyView" in meta.read_text()
+
+
+def test_set_default_registers_mime_types(fake_home, monkeypatch):
+    calls = []
+    monkeypatch.setattr(desktop.shutil, "which", lambda _n: "/usr/bin/xdg-mime")
+    monkeypatch.setattr(desktop, "run_tool",
+                        lambda cmd, **k: calls.append(cmd) or None)
+    mimes = desktop.set_default(["pdf"])
+    assert mimes == ["application/pdf"]
+    assert all(c[1] == "default" for c in calls)
+    assert all(c[2] == "org.cachyview.CachyView.desktop" for c in calls)
+
+
+def test_set_default_all_covers_every_kind(fake_home, monkeypatch):
+    monkeypatch.setattr(desktop.shutil, "which", lambda _n: "/usr/bin/xdg-mime")
+    monkeypatch.setattr(desktop, "run_tool", lambda cmd, **k: None)
+    mimes = set(desktop.set_default(["all"]))
+    assert set(desktop.ALL_MIMES) <= mimes
+
+
+def test_display_version():
+    from cachyview import __main__ as entry
+    import pytest as _pytest
+    with _pytest.raises(SystemExit) as exc:
+        entry.main(["--version"])
+    assert exc.value.code == 0

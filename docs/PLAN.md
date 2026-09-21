@@ -101,10 +101,16 @@ cachyview/
 - Archive extraction: path traversal (`../`, absolute, symlink escape) rejected;
   extract into a per-session dir under `$XDG_RUNTIME_DIR`, 0700, auto-purged.
 - Zip-bomb guard: ratio + total-size + entry-count caps, cancellable.
-- Passwords held in memory only (never argv — passed via stdin/env to 7z/unrar).
+- Archive passwords are passed to `7z`/`unrar` as command-line arguments and
+  are briefly visible in `/proc` to same-user processes (neither tool can read
+  one from a pipe). This is documented as a known limitation; the pure-Python
+  zip path never exposes the password.
 - No network calls at all (no telemetry, no update pings).
 - External tools invoked with argv lists, never shell strings.
-- PDF JS/embedded-file execution disabled; external links confirm before opening.
+- PDF JavaScript and embedded files are never executed; external links ask for
+  confirmation and only `http(s)`, `mailto` and `file` schemes are allowed.
+- External-tool extraction runs in an isolated staging directory and harvests
+  the result, dropping symlinks, so a link cannot redirect a later write.
 
 ## 5. Milestones
 1. Skeleton: core job runner, MIME routing, tabbed shell, text viewer, settings
@@ -116,3 +122,25 @@ cachyview/
 7. Dolphin service menus, MIME, thumbnailer, CLI
 8. Perf pass, fuzz/security tests, PKGBUILD + rollback script
 ```
+
+## 6. Implementation status (living section)
+
+This section records what is actually shipped versus the matrix above, so the
+plan never overstates the app. It is updated as gaps close.
+
+| Area | Status | Notes |
+|---|---|---|
+| Core shell, MIME, sandbox, job runner, text editor | done | Milestone 1 |
+| Image viewer + edit stack + batch | broad | Levels, curves and red-eye added; background removal (optional `rembg`) still absent; RAW/SVG/HEIC via optional deps |
+| Archive read/extract/write | broad | zip/7z/rar/tar.*/iso/cab/…; `.lz4` needs `python-lz4`; flat view added, nested nav opens a new tab; listing runs off the GUI thread |
+| PDF viewer + tools | broad | merge/split/extract/rotate/delete/compress/crop/watermark/image-watermark/page-numbers/header-footer/protect/repair/redact/OCR/flatten/N-up/booklet/linearize/annotate/sign-stamp/forms/HTML-out/PDF-A/PDF-to-DOCX |
+| PDF missing | gap | PKCS#12 (cryptographic) signing, page-text editing |
+| SVG | done | dedicated viewer + source pane with live preview |
+| Desktop integration | done | `org.cachyview.CachyView` desktop entry + AppStream metainfo (Discover), archive/PDF/image/generic Dolphin menus, KDE thumbnailer, `--set-default` via xdg-mime |
+| Security | done | traversal/symlink/bomb (ratio+size+entries) guards, cancellable extraction, argv-only subprocesses with scrubbed env, link confirmation, no JS |
+
+UI non-blocking status: extraction, batch, preview, PDF tools and archive
+listing run off the GUI thread. Single-instance uses a Qt local socket rather
+than D-Bus. Passwords are passed to `7z`/`unrar` in argv (documented in
+README/SECURITY).
+

@@ -75,7 +75,7 @@ class CompareDialog(QDialog):
         self.preview.clear()
         try:
             res = pb.diff_pages(self.a, self.b)
-        except Exception as exc:  # noqa: BLE001 - surface to the user
+        except Exception as exc:
             self.status.setText(f"Compare failed: {exc}")
             return
         changed = 0
@@ -88,14 +88,17 @@ class CompareDialog(QDialog):
             if entry["changed"]:
                 changed += 1
         self.status.setText(
-            f"{changed}/{res['pages']} pages differ{res.get('extra', '')}")
+            f"{changed}/{res['pages']} pages differ"
+            + (f" · {res['extra']} extra page(s)" if res.get("extra") else ""))
 
     def _show_preview(self, item) -> None:
         if item is None:
             return
-        path = item.data(Qt.ItemDataRole.UserRole)
-        if path and Path(path).exists():
-            self.preview.setPixmap(
-                QPixmap(path).scaledToHeight(260, Qt.TransformationMode.SmoothTransformation))
-        else:
-            self.preview.clear()
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data:
+            pm = QPixmap()
+            if pm.loadFromData(data):
+                self.preview.setPixmap(pm.scaledToHeight(
+                    260, Qt.TransformationMode.SmoothTransformation))
+                return
+        self.preview.clear()

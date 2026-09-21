@@ -131,7 +131,7 @@ class CropOverlay(QWidget):
             return "move"
         return None
 
-    def mousePressEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mousePressEvent(self, a0: QMouseEvent | None) -> None:
         if a0 is None:
             return
         pos = a0.pos()
@@ -148,7 +148,7 @@ class CropOverlay(QWidget):
             self._rect = QRect(pos, pos)
         self.update()
 
-    def mouseMoveEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mouseMoveEvent(self, a0: QMouseEvent | None) -> None:
         if a0 is None:
             return
         pos = self._clamp(a0.pos())
@@ -182,7 +182,7 @@ class CropOverlay(QWidget):
         self.update()
         self.changed.emit(self.image_rect())
 
-    def mouseReleaseEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, a0: QMouseEvent | None) -> None:
         self._mode = None
         if self.has_selection():
             self.changed.emit(self.image_rect())
@@ -197,7 +197,7 @@ class CropOverlay(QWidget):
                       max(0, min(pos.y(), self.height() - size.height())))
 
     # --- painting ---------------------------------------------------------
-    def paintEvent(self, a0) -> None:      # noqa: N802
+    def paintEvent(self, a0) -> None:
         if not self.has_selection():
             return
         painter = QPainter(self)

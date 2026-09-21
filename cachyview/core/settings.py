@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+from .safe import write_text_atomic
+
 
 def _path() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME")
@@ -32,4 +34,4 @@ def load() -> dict:
 def save(state: dict) -> None:
     current = load()
     current.update(state)
-    _path().write_text(json.dumps(current, indent=2), encoding="utf-8")
+    write_text_atomic(_path(), json.dumps(current, indent=2))

@@ -5,9 +5,9 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence
-from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
+from PyQt6.QtWidgets import (QFileDialog, QLabel,
                              QMainWindow, QMessageBox, QMenu, QSplitter,
-                             QStackedWidget, QTabWidget, QToolBar, QVBoxLayout,
+                             QStackedWidget, QTabWidget, QVBoxLayout,
                              QWidget)
 
 from ..core.mime import Kind, detect_kind
@@ -360,6 +360,9 @@ class MainWindow(QMainWindow):
         if kind == Kind.IMAGE:
             from .image_tab import ImageTab
             return ImageTab(path, self)
+        if kind == Kind.SVG:
+            from .svg_tab import SvgTab
+            return SvgTab(path, self)
         if kind == Kind.PDF:
             from .pdf_tab import PdfTab
             return PdfTab(path, self)
@@ -519,7 +522,7 @@ class MainWindow(QMainWindow):
             if Path(p).is_file():
                 self.open_path(p)
 
-    def contextMenuEvent(self, event) -> None:  # noqa: N802
+    def contextMenuEvent(self, event) -> None:
         tab = self.tabs.tabBar().tabAt(event.pos())
         if tab < 0:
             return
@@ -545,7 +548,7 @@ class MainWindow(QMainWindow):
         self._fill_recent_menu()
         self.empty.refresh()
 
-    def closeEvent(self, event) -> None:  # noqa: N802
+    def closeEvent(self, event) -> None:
         self.save_session()
         while self.tabs.count():
             before = self.tabs.count()
@@ -555,17 +558,17 @@ class MainWindow(QMainWindow):
                 return
         event.accept()
 
-    def keyPressEvent(self, event) -> None:  # noqa: N802
+    def keyPressEvent(self, event) -> None:
         if self.peek and event is not None and event.key() == Qt.Key.Key_Escape:
             self.close()
             return
         super().keyPressEvent(event)
 
-    def dragEnterEvent(self, event) -> None:  # noqa: N802
+    def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
-    def dropEvent(self, event) -> None:  # noqa: N802
+    def dropEvent(self, event) -> None:
         for url in event.mimeData().urls():
             if url.isLocalFile():
                 self.open_path(url.toLocalFile())

@@ -295,6 +295,6 @@ class PageOrganiser(QDialog):
         if self._loader is not None:
             self._loader.stop()
 
-    def done(self, a0: int) -> None:     # noqa: D102 - QDialog override
+    def done(self, a0: int) -> None:
         self.cleanup()
         super().done(a0)

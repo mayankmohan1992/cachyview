@@ -40,6 +40,51 @@ def test_histograms():
     assert sum(h["r"]) == 16 * 16
 
 
+def test_levels_maps_black_and_white():
+    img = Image.new("RGB", (3, 1))
+    img.putdata([(10, 10, 10), (128, 128, 128), (200, 200, 200)])
+    out = im.apply_ops(img, [im.Op("levels", {"black": 10, "white": 200})])
+    assert out.getpixel((0, 0)) == (0, 0, 0)
+    assert out.getpixel((2, 0)) == (255, 255, 255)
+    assert 155 <= out.getpixel((1, 0))[0] <= 161
+
+
+def test_levels_gamma_brightens():
+    img = Image.new("RGB", (1, 1), (100, 100, 100))
+    out = im.apply_ops(img, [im.Op("levels", {"gamma": 2.0})])
+    assert out.getpixel((0, 0))[0] > 100
+
+
+def test_curves_identity_and_s_curve():
+    img = Image.new("RGB", (3, 1))
+    img.putdata([(30, 30, 30), (128, 128, 128), (220, 220, 220)])
+    identity = im.apply_ops(img, [im.Op("curves", {"points": [(0, 0), (255, 255)]})])
+    assert identity.getpixel((1, 0)) == (128, 128, 128)
+    lifted = im.apply_ops(img, [im.Op("curves", {"points": [(0, 0), (128, 180), (255, 255)]})])
+    assert lifted.getpixel((1, 0))[0] > 128
+
+
+def test_curves_needs_two_points():
+    with pytest.raises(im.ImageError):
+        im.apply_ops(Image.new("RGB", (2, 2)), [im.Op("curves", {"points": [(0, 0)]})])
+
+
+def test_redeye_desaturates_red_pupil():
+    img = Image.new("RGB", (3, 1))
+    img.putdata([(220, 30, 30), (30, 220, 30), (40, 40, 40)])
+    out = im.apply_ops(img, [im.Op("redeye", {"threshold": 1.5, "strength": 1.0})])
+    r, g, b = out.getpixel((0, 0))
+    assert r == (g + b) // 2 and r < 220
+    assert out.getpixel((1, 0)) == (30, 220, 30)
+    assert out.getpixel((2, 0)) == (40, 40, 40)
+
+
+def test_redeye_leaves_alpha_alone():
+    img = Image.new("RGBA", (2, 1), (220, 30, 30, 123))
+    out = im.apply_ops(img, [im.Op("redeye", {"box": (0, 0, 2, 1)})])
+    assert out.getpixel((0, 0))[3] == 123
+
+
 def test_minify_json():
     assert tb.minify('{"a": 1, "b": [2]}', "json") == '{"a":1,"b":[2]}'
 
@@ -51,6 +96,17 @@ def test_validate_json_ok():
 def test_validate_json_bad():
     with pytest.raises(ValueError):
         tb.validate("{", "json")
+
+
+def test_pretty_print_yaml():
+    out = tb.pretty_print("b: 2\na: 1\n", "yaml")
+    assert "a: 1" in out and "b: 2" in out
+    assert out.count("\n") >= 2
+
+
+def test_validate_yaml_bad():
+    with pytest.raises(ValueError):
+        tb.validate("a: [1, 2\n", "yaml")
 
 
 def test_unified_diff():

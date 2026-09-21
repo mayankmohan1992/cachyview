@@ -1,6 +1,7 @@
 """PDF viewer tab: continuous page view, thumbnails, outline, search and tools."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
@@ -12,7 +13,6 @@ from PyQt6.QtWidgets import (QColorDialog, QComboBox, QHBoxLayout, QInputDialog,
                              QVBoxLayout, QWidget)
 
 from ..backends import pdf as pb
-from ..core.jobs import submit
 from ..core.safe import replace_in_place
 from .annotation_layer import AnnotationLayer
 from .pdf_tools import run_tool, _run_in_place
@@ -53,7 +53,8 @@ class PdfTab(QWidget):
         self.page = 1
         self.zoom = 1.0
         self._jobs: list = []
-        self._page_cache: dict[tuple[int, int], QPixmap] = {}
+        self._page_cache: OrderedDict[tuple[int, int], QPixmap] = OrderedDict()
+        self._page_cache_max = 24
         self._pending: list[pb.Annotation] = []
         self._undo: list[pb.Annotation] = []
         self._search_hits: list[tuple[int, tuple]] = []
@@ -158,6 +159,8 @@ class PdfTab(QWidget):
         self.search_box.returnPressed.connect(self.search_next)
         bar.addSeparator()
         bar.addWidget(self.search_box)
+        add_action(bar, "go-previous", "Previous match", self.search_prev,
+                   tooltip="Previous search match")
 
         bar.addSeparator()
         add_action(bar, "object-rotate-left", "Rotate left",
@@ -166,6 +169,10 @@ class PdfTab(QWidget):
         add_action(bar, "object-rotate-right", "Rotate right",
                    lambda: self.rotate_current(90),
                    tooltip="Rotate current page right")
+        self.dark_btn = add_action(
+            bar, ("view-contrast", "color-invert", "object-invert-image"),
+            "Invert view", self._toggle_dark, checkable=True,
+            tooltip="Invert colours for dark-mode reading (view only)")
         bar.addSeparator()
 
         self.annot_btn = icon_button(
@@ -239,8 +246,11 @@ class PdfTab(QWidget):
                      "Merge with…", "Compress", "Flatten", "Protect",
                      "Unlock", "Watermark", "Page numbers",
                      "Crop & Resize", "Invert colours", "Headers & Footers",
-                     "To images", "To text", "OCR", "Repair", "Sign / Stamp",
-                     "Bookmarks…", "Metadata", "Fill form…", "Fingerprint"):
+                     "N-up…", "Booklet…", "Linearize",
+                     "To images", "To text", "To HTML", "To Word (.docx)",
+                     "To PDF/A", "OCR", "Repair",
+                     "Sign / Stamp", "Bookmarks…", "Metadata", "Fill form…",
+                     "Text / Markdown to PDF…", "Fingerprint"):
             over_menu.addAction(name, lambda n=name: run_tool(self, n))
         over_menu.addSeparator()
         over_menu.addAction("Present", lambda: self.present_btn.toggle())
@@ -395,17 +405,31 @@ class PdfTab(QWidget):
         """Start/stop a timer that advances pages automatically."""
         from PyQt6.QtCore import QTimer
         if on:
+            window = self.window()
+            self._present_restore = window.isMaximized()
+            window.showFullScreen()
             self._present_timer = QTimer(self)
             self._present_timer.setInterval(3000)
             self._present_timer.timeout.connect(self._present_tick)
             self._present_timer.start()
-            self.status.setText("Presenting — pages advance every 3s (Esc/again to stop)")
+            self.status.setText("Presenting — ←/→ change page, Esc stops")
         else:
             if self._present_timer is not None:
                 self._present_timer.stop()
                 self._present_timer.deleteLater()
                 self._present_timer = None
+            window = self.window()
+            if window.isFullScreen():
+                if getattr(self, "_present_restore", False):
+                    window.showMaximized()
+                else:
+                    window.showNormal()
             self.status.setText("Presentation stopped.")
+
+    def _toggle_dark(self) -> None:
+        on = bool(self.dark_btn and self.dark_btn.isChecked())
+        self.strip.set_invert(on)
+        self.status.setText("Dark view on." if on else "Dark view off.")
 
     def _present_tick(self) -> None:
         if self.page >= self.info.page_count:
@@ -495,19 +519,29 @@ class PdfTab(QWidget):
         self.status.setText(
             f"Page {self.page} of {self.info.page_count if self.info else '?'} · {int(self.zoom * 100)}%")
 
+    def _cache_get(self, key: tuple[int, int]) -> "QPixmap | None":
+        pix = self._page_cache.get(key)
+        if pix is not None:
+            self._page_cache.move_to_end(key)
+        return pix
+
+    def _cache_put(self, key: tuple[int, int], pixmap: QPixmap) -> None:
+        self._page_cache[key] = pixmap
+        self._page_cache.move_to_end(key)
+        while len(self._page_cache) > self._page_cache_max:
+            self._page_cache.popitem(last=False)
+
     def _render(self) -> None:
         if not self.info:
             return
         dpi = self.strip.current_dpi()
         key = (self.page, dpi)
-        cached = self._page_cache.get(key)
+        cached = self._cache_get(key)
         if cached is None:
             cached = self._raster(self.page, dpi)
             if cached is None:
                 return
-            if len(self._page_cache) > 24:
-                self._page_cache.clear()
-            self._page_cache[key] = cached
+            self._cache_put(key, cached)
         self.page_label.setPixmap(cached)
         self.strip.show_pixmap(self.page, cached, dpi)
         self.status.setText(
@@ -531,14 +565,12 @@ class PdfTab(QWidget):
         if not self.info:
             return
         key = (page, dpi)
-        cached = self._page_cache.get(key)
+        cached = self._cache_get(key)
         if cached is None:
             cached = self._raster(page, dpi)
             if cached is None:
                 return
-            if len(self._page_cache) > 24:
-                self._page_cache.clear()
-            self._page_cache[key] = cached
+            self._cache_put(key, cached)
         self.strip.show_pixmap(page, cached, dpi)
         if page == self.page:
             self.page_label.setPixmap(cached)
@@ -558,23 +590,38 @@ class PdfTab(QWidget):
 
     # --- search ----------------------------------------------------------
     def search_next(self) -> None:
+        self._search(1)
+
+    def search_prev(self) -> None:
+        self._search(-1)
+
+    def _search(self, direction: int) -> None:
         needle = self.search_box.text().strip()
         if not needle or not self.info:
             return
-        try:
-            hits = pb.search_text(self.path, needle, password=self.password)
-        except pb.PdfError:
-            hits = []
-        self._search_hits = hits
+        if needle != getattr(self, "_search_needle", None) or not self._search_hits:
+            try:
+                self._search_hits = pb.search_text(
+                    self.path, needle, password=self.password)
+            except pb.PdfError:
+                self._search_hits = []
+            self._search_needle = needle
+        hits = self._search_hits
         self.strip.set_search_hits(hits)
         if not hits:
             self.status.setText(f"'{needle}' not found")
             return
-        after = [h for h in hits if h[0] > self.page] or hits
-        page, _rect = after[0]
+        if direction > 0:
+            after = [h for h in hits if h[0] > self.page] or hits
+            page, _rect = after[0]
+        else:
+            before = [h for h in hits if h[0] < self.page] or hits
+            page, _rect = before[-1]
         self.go_to(page)
         n = sum(1 for h in hits if h[0] == page)
-        self.status.setText(f"Found '{needle}' on page {page} ({len(hits)} hit(s), {n} on this page)")
+        self.status.setText(
+            f"Found '{needle}' on page {page} ({len(hits)} hit(s), "
+            f"{n} on this page)")
 
     # --- annotations -----------------------------------------------------
     def _on_annotate_mode(self, action) -> None:
@@ -726,7 +773,7 @@ class PdfTab(QWidget):
             return
 
         def write(tmp: Path) -> None:
-            pdf_backend.redact(self.path, tmp, [rect],
+            pdf_backend.redact(self.path, tmp, [rect], page=self.page,
                               password=self.password)
 
         self.status.setText("Redacting…")
@@ -749,7 +796,7 @@ class PdfTab(QWidget):
         self.status.setText("Click anywhere on the page to place the signature "
                             "(Esc to cancel).")
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+    def eventFilter(self, obj, event) -> bool:
         return super().eventFilter(obj, event)
 
     def _place_signature_at(self, pos) -> None:
@@ -781,7 +828,21 @@ class PdfTab(QWidget):
         self.annot_layer.refresh()
         self.status.setText("Signature placed.")
 
-    def keyPressEvent(self, a0) -> None:  # noqa: N802
+    def keyPressEvent(self, a0) -> None:
+        if a0 is not None and self.present_btn.isChecked():
+            if a0.key() == Qt.Key.Key_Escape:
+                self.present_btn.setChecked(False)
+                a0.accept()
+                return
+            if a0.key() in (Qt.Key.Key_Next, Qt.Key.Key_Space,
+                            Qt.Key.Key_Right, Qt.Key.Key_Down):
+                self.next_page()
+                a0.accept()
+                return
+            if a0.key() in (Qt.Key.Key_Prior, Qt.Key.Key_Left, Qt.Key.Key_Up):
+                self.prev_page()
+                a0.accept()
+                return
         if a0 is not None and a0.key() == Qt.Key.Key_Escape \
                 and self.annot_layer.mode != "off":
             self.annot_layer.set_mode("off")
@@ -853,7 +914,7 @@ class PdfTab(QWidget):
         spec = _ranges_label(pages)
         dest, _ = QFileDialog.getSaveFileName(
             self, "Extract pages",
-            str(Path(self.path).with_suffix("")) + f"-pages.pdf",
+            str(Path(self.path).with_suffix("")) + "-pages.pdf",
             "PDF (*.pdf)")
         if not dest:
             return
@@ -919,7 +980,7 @@ class PdfTab(QWidget):
     def print_file(self) -> None:
         """Send the PDF file to CUPS instead of rasterising every page."""
         import shutil
-        import subprocess
+        from ..core.process import run as run_tool
         from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
         printer = QPrinter()
         dialog = QPrintDialog(printer, self)
@@ -941,7 +1002,7 @@ class PdfTab(QWidget):
             cmd.extend(["-P", f"{frm}-{to}"])
         cmd.append(str(self.path))
         try:
-            subprocess.run(cmd, check=False, capture_output=True, timeout=30)
+            run_tool(cmd, timeout=30)
         except OSError as exc:
             QMessageBox.warning(self, "Print", str(exc))
             return
@@ -952,6 +1013,6 @@ class PdfTab(QWidget):
         if self._thumbs is not None:
             self._thumbs.stop()
 
-    def closeEvent(self, a0) -> None:  # noqa: N802
+    def closeEvent(self, a0) -> None:
         self.cleanup()
         super().closeEvent(a0)

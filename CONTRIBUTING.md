@@ -15,7 +15,7 @@ derivative) the fast path is:
 
 ```bash
 sudo pacman -S --needed base-devel git python python-pyqt6 python-pillow \
-    python-pymupdf python-pikepdf python-ocr mypdf ocrmypdf img2pdf \
+    python-pymupdf python-pikepdf python-ocrmypdf img2pdf \
     libvips 7zip unrar ghostscript qpdf poppler tesseract
 python -m venv .venv --system-site-packages
 . .venv/bin/activate

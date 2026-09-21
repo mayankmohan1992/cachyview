@@ -36,7 +36,7 @@ class DraggableArchiveTree(QTreeWidget):
     password: str | None
     _sandbox: Sandbox
 
-    def startDrag(self, supportedActions: Qt.DropAction) -> None:  # noqa: N802
+    def startDrag(self, supportedActions: Qt.DropAction) -> None:
         members = self._selected_file_members()
         if not members:
             return

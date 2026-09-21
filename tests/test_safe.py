@@ -2,7 +2,8 @@
 import pytest
 from pathlib import Path
 
-from cachyview.core.safe import replace_in_place, safe_backup_path
+from cachyview.core.safe import (replace_in_place, safe_backup_path,
+                                 write_text_atomic)
 
 
 def test_replace_writes_new_content(tmp_path):
@@ -65,3 +66,17 @@ def test_replace_missing_target_writes_directly(tmp_path):
     assert target.read_text() == "created"
     # No backup when there was nothing to back up.
     assert not safe_backup_path(target).exists()
+
+
+def test_write_text_atomic_creates_parents(tmp_path):
+    target = tmp_path / "nested" / "dir" / "state.json"
+    write_text_atomic(target, '{"a": 1}')
+    assert target.read_text() == '{"a": 1}'
+    assert not list(target.parent.glob("*.cachyview-tmp-*"))
+
+
+def test_write_text_atomic_overwrites(tmp_path):
+    target = tmp_path / "state.json"
+    target.write_text("old")
+    write_text_atomic(target, "new")
+    assert target.read_text() == "new"

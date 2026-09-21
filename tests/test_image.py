@@ -70,6 +70,63 @@ def test_load_corrupt_file_raises(tmp_path):
         im.load(bad)
 
 
+def test_unsupported_format_error_mentions_install(tmp_path):
+    """A format we cannot decode must say how to enable it, not just fail."""
+    fake = tmp_path / "photo.heic"
+    fake.write_bytes(b"not really a heic file")
+    with pytest.raises(im.ImageError, match="paru -S --needed"):
+        im.load(fake)
+
+
+def test_unsupported_hint_covers_raw():
+    assert "python-rawpy" in im._unsupported_hint(".cr2")
+    assert im._unsupported_hint(".txt") == ""
+
+
+def test_resize_honours_resample(tmp_path):
+    img = Image.new("RGB", (100, 50), (10, 20, 30))
+    out = im.apply_ops(img, [im.Op("resize", {"width": 40, "height": 20,
+                                              "resample": "nearest"})])
+    assert out.size == (40, 20)
+
+
+def test_watermark_text_changes_pixels():
+    img = Image.new("RGB", (300, 200), (255, 255, 255))
+    out = im.apply_ops(img, [im.Op("watermark", {
+        "text": "COPY", "position": "bottom-right", "opacity": 1.0,
+        "size": 24, "color": "#000000"})])
+    assert out.size == (300, 200)
+    changed = sum(1 for px in out.getdata() if px != (255, 255, 255))
+    assert changed > 0, "watermark text must alter pixels"
+
+
+def test_watermark_image(tmp_path):
+    base = Image.new("RGB", (400, 300), (255, 255, 255))
+    mark = tmp_path / "logo.png"
+    Image.new("RGBA", (40, 40), (255, 0, 0, 255)).save(mark)
+    out = im.apply_ops(base, [im.Op("watermark", {
+        "image": str(mark), "position": "top-left", "opacity": 1.0,
+        "scale": 0.25})])
+    assert out.size == (400, 300)
+    # The margin is 16px, so the logo starts at (16, 16).
+    assert out.getpixel((30, 30))[0] > 200 and out.getpixel((30, 30))[1] < 60
+    assert out.getpixel((5, 5)) == (255, 255, 255)
+
+
+def test_frame_durations_reads_gif(tmp_path):
+    from PIL import ImageDraw
+    frames = []
+    for i in range(3):
+        f = Image.new("RGB", (10, 10), (255, 255, 255))
+        ImageDraw.Draw(f).rectangle([0, 0, i + 1, 9], fill=(0, 0, 0))
+        frames.append(f)
+    gif = tmp_path / "anim.gif"
+    frames[0].save(gif, save_all=True, append_images=frames[1:],
+                   duration=[120, 240, 360], loop=0)
+    durations = im.frame_durations(gif)
+    assert durations[:3] == [120, 240, 360]
+
+
 # --- geometry ops ---------------------------------------------------------
 
 def test_rotate_90_swaps_dimensions(photo):

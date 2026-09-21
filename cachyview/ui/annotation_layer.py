@@ -124,7 +124,7 @@ class AnnotationLayer(QWidget):
                               int(geom.y + (pg.height - y) * zoom)))
         return out
 
-    def mousePressEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mousePressEvent(self, a0: QMouseEvent | None) -> None:
         if a0 is None or self.mode == "off":
             return
         self._drag_start = a0.position().toPoint()
@@ -135,7 +135,7 @@ class AnnotationLayer(QWidget):
             self._target_page = hit[0]
         self.update()
 
-    def mouseMoveEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mouseMoveEvent(self, a0: QMouseEvent | None) -> None:
         if a0 is None or self._drag_start is None:
             return
         pos = a0.position().toPoint()
@@ -145,7 +145,7 @@ class AnnotationLayer(QWidget):
             self._draft = QRect(self._drag_start, pos).normalized()
         self.update()
 
-    def mouseReleaseEvent(self, a0: QMouseEvent | None) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, a0: QMouseEvent | None) -> None:
         if a0 is None or self._drag_start is None:
             return
         rect = self._draft
@@ -194,7 +194,7 @@ class AnnotationLayer(QWidget):
         self.tab.apply_annotation(self.mode, pdf_rect, self.color, "", pdf_pts,
                                   page=self._target_page)
 
-    def paintEvent(self, a0) -> None:  # noqa: N802
+    def paintEvent(self, a0) -> None:
         if self.mode == "off" and not self.show_marks:
             return
         painter = QPainter(self)

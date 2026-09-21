@@ -14,7 +14,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ..core.process import run as run_tool
+
 APP_ID = "cachyview"
+# Reverse-DNS identity used by the desktop entry and AppStream metadata, so
+# software centres (Discover/GNOME Software) can associate the two.
+DESKTOP_ID = "org.cachyview.CachyView"
 
 ARCHIVE_MIMES = [
     "application/zip", "application/x-7z-compressed", "application/vnd.rar",
@@ -25,12 +30,15 @@ ARCHIVE_MIMES = [
     "application/x-cd-image", "application/vnd.ms-cab-compressed",
     "application/x-compressed-tar", "application/x-xz-compressed-tar",
     "application/x-bzip-compressed-tar", "application/x-zstd-compressed-tar",
+    "application/x-lz4", "application/x-lz4-compressed-tar",
+    "application/x-tar.lz4",
 ]
 PDF_MIMES = ["application/pdf"]
 IMAGE_MIMES = [
     "image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp",
     "image/tiff", "image/svg+xml", "image/x-icon", "image/avif",
-    "image/heif", "image/jxl", "image/x-portable-pixmap",
+    "image/heic", "image/heif", "image/heic-sequence", "image/jxl",
+    "image/x-portable-pixmap", "image/x-xcf",
 ]
 TEXT_MIMES = ["text/plain", "text/markdown", "application/json",
               "text/xml", "application/xml", "text/csv"]
@@ -48,17 +56,77 @@ def paths() -> dict[str, Path]:
     data = data_home()
     menus = data / "kio" / "servicemenus"
     return {
-        "desktop": data / "applications" / f"{APP_ID}.desktop",
+        "desktop": data / "applications" / f"{DESKTOP_ID}.desktop",
         "menu_archive": menus / f"{APP_ID}-archive.desktop",
         "menu_pdf": menus / f"{APP_ID}-pdf.desktop",
         "menu_image": menus / f"{APP_ID}-image.desktop",
+        "menu_any": menus / f"{APP_ID}-open.desktop",
+        "thumbnailer": data / "thumbnailers" / f"{APP_ID}.thumbnailer",
         "icon": data / "icons" / "hicolor" / "scalable" / "apps" / f"{APP_ID}.svg",
+        "metainfo": data / "metainfo" / f"{DESKTOP_ID}.metainfo.xml",
     }
 
 
 # --------------------------------------------------------------------------
 # file contents
 # --------------------------------------------------------------------------
+
+def metainfo_xml() -> str:
+    """AppStream metadata, so software centres can list and launch the app."""
+    from .. import __version__
+
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>{DESKTOP_ID}</id>
+  <name>CachyView</name>
+  <summary>View and edit archives, PDFs, images and text</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      CachyView is a fast, native, fully offline toolkit for Linux: browse and
+      extract archives, read and edit PDFs, view and adjust images, and edit
+      text — all in one window. It is built on Qt 6 and MuPDF and makes no
+      network calls.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>PDF: view, annotate, redact, sign, OCR, compress, merge, split,
+          N-up, booklet and PDF/A export</li>
+      <li>Images: filmstrip, histogram, non-destructive adjustments, crop,
+          resize, markup and batch conversion</li>
+      <li>Archives: zip, 7z, rar, tar.* with a preview pane and sandboxed
+          extraction</li>
+      <li>Text: syntax highlighting, find/replace, markdown and CSV views,
+          and a hex viewer</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">{DESKTOP_ID}.desktop</launchable>
+  <url type="homepage">https://github.com/mayankmohan1992/cachyview</url>
+  <url type="bugtracker">https://github.com/mayankmohan1992/cachyview/issues</url>
+  <developer id="org.cachyview">
+    <name>CachyView contributors</name>
+  </developer>
+  <provides>
+    <binary>cachyview</binary>
+    <binary>cachyview-cli</binary>
+    <mediatype>application/pdf</mediatype>
+    <mediatype>application/zip</mediatype>
+    <mediatype>image/png</mediatype>
+    <mediatype>image/jpeg</mediatype>
+    <mediatype>text/plain</mediatype>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>Viewer</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="{__version__}" date="2026-09-21"/>
+  </releases>
+</component>
+"""
+
 
 def desktop_entry(exec_path: str) -> str:
     return f"""[Desktop Entry]
@@ -72,8 +140,9 @@ Terminal=false
 Categories=Graphics;Viewer;Qt;
 MimeType={';'.join(ALL_MIMES)};
 StartupNotify=true
-StartupWMClass=cachyview
+StartupWMClass=CachyView
 Keywords=pdf;archive;zip;image;viewer;editor;ocr;compress;
+X-GNOME-UsesNotifications=true
 """
 
 
@@ -210,6 +279,32 @@ Exec={cli} image convert -f png --resize 1920 %F
 """
 
 
+def any_menu(gui: str) -> str:
+    """A catch-all 'Open with CachyView' entry for every file type."""
+    return f"""[Desktop Entry]
+Type=Service
+ServiceTypes=KonqPopupMenu/Plugin
+MimeType=all/allfiles;
+Actions=cvOpenAny;
+X-KDE-Priority=TopLevel
+
+[Desktop Action cvOpenAny]
+Name=Open with CachyView
+Icon=cachyview
+Exec={gui} %F
+"""
+
+
+def thumbnailer_entry(cli: str) -> str:
+    """A KDE thumbnailer that renders PDFs and images via the CLI."""
+    mimes = ";".join(PDF_MIMES + IMAGE_MIMES)
+    return f"""[Thumbnailer Entry]
+TryExec={cli}
+Exec={cli} thumbnail %i %o --size %s
+MimeType={mimes};
+"""
+
+
 # --------------------------------------------------------------------------
 # install / uninstall
 # --------------------------------------------------------------------------
@@ -223,6 +318,9 @@ def install(gui_cmd: str = "cachyview", cli_cmd: str = "cachyview-cli",
         "menu_archive": archive_menu(gui_cmd, cli_cmd),
         "menu_pdf": pdf_menu(gui_cmd, cli_cmd),
         "menu_image": image_menu(gui_cmd, cli_cmd),
+        "menu_any": any_menu(gui_cmd),
+        "thumbnailer": thumbnailer_entry(cli_cmd),
+        "metainfo": metainfo_xml(),
     }
     written: list[Path] = []
     for key, target in targets.items():
@@ -261,8 +359,7 @@ def refresh_caches() -> None:
         if not tool:
             continue
         try:
-            subprocess.run([tool, *cmd[1:]], capture_output=True, timeout=60,
-                           check=False)
+            run_tool([tool, *cmd[1:]], timeout=60)
         except (OSError, subprocess.SubprocessError):
             pass
 
@@ -270,3 +367,33 @@ def refresh_caches() -> None:
 def status() -> dict[str, bool]:
     """Which integration files are currently installed."""
     return {name: target.exists() for name, target in paths().items()}
+
+
+KIND_MIMES = {
+    "pdf": PDF_MIMES,
+    "images": IMAGE_MIMES,
+    "archives": ARCHIVE_MIMES,
+    "text": TEXT_MIMES,
+}
+
+
+def set_default(kinds: list[str] | None = None) -> list[str]:
+    """Register CachyView as the default handler for *kinds* via xdg-mime.
+
+    *kinds* is any of ``pdf``, ``images``, ``archives``, ``text`` or ``all``
+    (and the default when empty).  Returns the MIME types that were set.
+    """
+    xdg = shutil.which("xdg-mime")
+    if not xdg:
+        raise RuntimeError("xdg-mime is not installed (xdg-utils package).")
+    wanted = [k for k in (kinds or ["all"]) if k]
+    if not wanted or "all" in wanted:
+        mimes = list(ALL_MIMES)
+    else:
+        mimes = []
+        for kind in wanted:
+            mimes.extend(KIND_MIMES.get(kind, []))
+    desktop_file = f"{DESKTOP_ID}.desktop"
+    for mime in dict.fromkeys(mimes):
+        run_tool([xdg, "default", desktop_file, mime], timeout=30)
+    return list(dict.fromkeys(mimes))

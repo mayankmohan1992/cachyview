@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                             QFormLayout, QHBoxLayout, QLabel, QSpinBox,
-                             QVBoxLayout, QWidget)
+                             QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+                             QLineEdit, QPushButton, QSpinBox, QVBoxLayout,
+                             QWidget)
 
 
 class ResizeDialog(QDialog):
@@ -88,6 +89,12 @@ class ResizeDialog(QDialog):
     def result_size(self) -> tuple[int, int]:
         return self.w.value(), self.h.value()
 
+    def keep_aspect(self) -> bool:
+        return self.lock.isChecked()
+
+    def resample_name(self) -> str:
+        return ("lanczos", "bicubic", "nearest")[self.resample.currentIndex()]
+
 
 class CanvasDialog(QDialog):
     def __init__(self, width: int, height: int, parent: QWidget | None = None):
@@ -147,3 +154,68 @@ class ExportDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
+
+
+class WatermarkDialog(QDialog):
+    """Choose an image and/or text watermark and where it goes."""
+
+    POSITIONS = ["bottom-right", "bottom-left", "bottom", "top-right",
+                 "top-left", "top", "center"]
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Watermark")
+        self.text = QLineEdit(self)
+        self.text.setPlaceholderText("optional text")
+        self.image = QLineEdit(self)
+        self.image.setPlaceholderText("optional image/logo")
+        browse = QPushButton("Browse…", self)
+        browse.clicked.connect(self._pick)
+        row = QHBoxLayout()
+        row.addWidget(self.image, 1)
+        row.addWidget(browse)
+        self.position = QComboBox(self)
+        self.position.addItems(self.POSITIONS)
+        self.opacity = QSpinBox(self)
+        self.opacity.setRange(1, 100)
+        self.opacity.setValue(50)
+        self.opacity.setSuffix("%")
+        self.scale = QSpinBox(self)
+        self.scale.setRange(1, 100)
+        self.scale.setValue(20)
+        self.scale.setSuffix("% of width")
+        self.size = QSpinBox(self)
+        self.size.setRange(8, 400)
+        self.size.setValue(32)
+        form = QFormLayout()
+        form.addRow("Text", self.text)
+        form.addRow("Image", row)
+        form.addRow("Position", self.position)
+        form.addRow("Opacity", self.opacity)
+        form.addRow("Image scale", self.scale)
+        form.addRow("Text size", self.size)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def _pick(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Watermark image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tiff)")
+        if path:
+            self.image.setText(path)
+
+    def values(self) -> dict:
+        return {
+            "text": self.text.text().strip() or None,
+            "image": self.image.text().strip() or None,
+            "position": self.position.currentText(),
+            "opacity": self.opacity.value() / 100,
+            "scale": self.scale.value() / 100,
+            "size": self.size.value(),
+        }
