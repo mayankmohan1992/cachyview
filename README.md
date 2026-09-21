@@ -131,7 +131,14 @@ ready-to-run bundle:
 2. Extract it: `tar --zstd -xf cachyview-*.tar.zst`.
 3. Run `./cachyview/cachyview` (or copy it somewhere on your `PATH`).
 
-The bundle is fully portable and needs only the runtime libraries listed above.
+The bundle is self-contained: it carries its own Python runtime and the Qt and
+MuPDF libraries, so the target machine needs **no system Python and no Python
+packages** — only the usual desktop runtime libraries (glibc, OpenGL, X11 or
+Wayland, fontconfig, libxcb and so on). It is relocatable, so it runs from any
+directory.
+
+To build one yourself: `tools/bundle.sh /tmp/cachyview` (needs
+[`uv`](https://astral.sh/uv) once, to fetch a standalone Python).
 
 ---
 

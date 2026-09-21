@@ -2,7 +2,7 @@
 # Contributors welcome — see https://github.com/mayankmohan1992/cachyview/CONTRIBUTING.md
 
 pkgname=cachyview
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc="Fast native archive, PDF, image and text toolkit for Linux — the offline, privacy-first alternative to macOS Preview."
 arch=('x86_64' 'aarch64')

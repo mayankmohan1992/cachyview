@@ -6,6 +6,22 @@ All notable changes are documented here. This project adheres to
 Release notes for each version are also generated automatically on the
 [GitHub Releases page](https://github.com/mayankmohan1992/cachyview/releases).
 
+## [0.3.1] - 2026-09-21
+
+### Fixed
+- The portable release bundle now actually runs. It carries a relocatable
+  standalone Python (no host Python required) and its launchers resolve their
+  own directory instead of hard-coding the CI build path. The 0.3.0 bundle
+  pointed at `/home/runner/...` and was pinned to the builder's Python minor
+  version, so it failed on every other machine.
+- Slimmed the bundle by ~30% (128 MB → ~91 MB). The PyQt6 wheel ships every Qt
+  module, so QML, QtQuick/Quick3D, Designer, ShaderTools, Multimedia (and its
+  FFmpeg libraries), Bluetooth, Help, QtPdf, translations, QScintilla, `.pyi`
+  dev stubs, the unused `pip` and the Tcl/Tk libraries are now pruned, and the
+  statically-linked interpreter's redundant `libpython*.so` is dropped. `lxml`
+  is kept because `pikepdf` requires it.
+- Stop tracking the `cachyview.egg-info/` build artifact.
+
 ## [0.3.0] - 2026-09-21
 
 ### Fixed

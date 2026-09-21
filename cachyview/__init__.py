@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 import sysconfig
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 
 def _purge_foreign_site_packages() -> list[str]:

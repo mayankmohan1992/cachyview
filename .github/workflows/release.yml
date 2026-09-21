@@ -23,7 +23,7 @@ jobs:
             ghostscript qpdf poppler-utils tesseract-ocr \
             7zip p7zip-full unrar zstd
           python3 -m pip install --upgrade pip
-          python3 -m pip install ocrmypdf img2pdf
+          python3 -m pip install ocrmypdf img2pdf uv
 
       - name: Build portable bundle
         run: bash -x tools/bundle.sh "${{ github.workspace }}/dist/cachyview"
